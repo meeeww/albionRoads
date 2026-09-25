@@ -144,7 +144,11 @@ const explore = async (tracker) => {
             if (!step) return 'unreachable'
             if (step.final) {
                 const zone = withTimeout(tracker, 'zone', 20000)
-                click(step.screen)
+                // A portal ignores clicks for several seconds after coming through it, so keep clicking.
+                for (let tries = 0; tries < 10; tries++) {
+                    click(view.toScreen([target[0] - tracker.pos[0], target[1] - tracker.pos[1]]))
+                    if (await Promise.race([zone, sleep(2000)])) return 'arrived'
+                }
                 if (await zone) return 'arrived'
                 // Standing on the spot with no zone change means no portal has spawned there.
                 const left = Math.hypot(target[0] - tracker.pos[0], target[1] - tracker.pos[1])
