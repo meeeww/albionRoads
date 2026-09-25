@@ -13,6 +13,7 @@ const STEER_MS = 400
 // this long while this near the spot means it's closed right now.
 const CLOSED_NEAR_UNITS = 120
 const NO_PROGRESS_MS = 20000
+const PORTAL_COOLDOWN_MS = 12000
 const CALIBRATION_PX = [[180, 0], [0, 180], [-180, -180], [-150, 120]]
 // Least-squares fit of d = A * s + b over (screen offset -> world offset) samples.
 const solveAffine = (samples) => {
@@ -135,15 +136,16 @@ const explore = async (tracker) => {
     // just ahead of the character, not the ground under the cursor.
     const view = solveAffine(firstSamples)
 
-    const usePortal = async (exit) => {
+    // `open`: the portal is known to be there (we just came through it), so never give up on it as closed.
+    const usePortal = async (exit, open = false) => {
         try {
-            return await walkThrough(exit)
+            return await walkThrough(exit, open)
         } finally {
             release()
         }
     }
 
-    const walkThrough = async (exit) => {
+    const walkThrough = async (exit, open) => {
         const target = [exit.x, exit.y]
         const started = Date.now()
         let last = tracker.pos
@@ -155,7 +157,7 @@ const explore = async (tracker) => {
             if (distance() < closest - 3) {
                 closest = distance()
                 closerAt = Date.now()
-            } else if (closest < CLOSED_NEAR_UNITS && Date.now() - closerAt > NO_PROGRESS_MS) {
+            } else if (!open && closest < CLOSED_NEAR_UNITS && Date.now() - closerAt > NO_PROGRESS_MS) {
                 return 'closed'
             }
             const step = planStep(tracker.trails, tracker.zone, tracker.pos, target, view.toScreen, STEP_PX)
@@ -168,6 +170,8 @@ const explore = async (tracker) => {
                     if (await Promise.race([zone, sleep(2000)])) return 'arrived'
                 }
                 if (await zone) return 'arrived'
+                // A rejected click can walk the character off the portal; walk back and try again.
+                if (open) continue
                 // Standing at the spot with no zone change means no portal has spawned there.
                 return distance() < CLOSED_NEAR_UNITS ? 'closed' : 'unreachable'
             }
@@ -244,10 +248,11 @@ const explore = async (tracker) => {
             continue
         }
 
-        await sleep(3000)
+        // A portal refuses the player for several seconds after coming through it.
+        await sleep(PORTAL_COOLDOWN_MS)
         const back = exitsOf(tracker.zone).find((exit) => exit.slot === tracker.linkOf(home, next.slot)?.slot)
         console.log(`Going back to ${nameOf(home)}`)
-        const wentBack = back ? await usePortal(back) === 'arrived' : await goBackBlind()
+        const wentBack = back ? await usePortal(back, true) === 'arrived' : await goBackBlind()
         if (!wentBack) throw new Error('Could not go back through the portal.')
         await sleep(3000)
     }
