@@ -50,6 +50,24 @@ try {
     assert.strictEqual(tracker.linkOf('TNL-109', 'instanceslot_03').zone, 'TNL-125')
     assert.strictEqual(tracker.linkOf('TNL-125', 'instanceslot_02').slot, 'instanceslot_03')
 
+    // A timer typed on the map sets both directions, persists, survives going through again,
+    // and the link drops once it runs out; a later hop starts a fresh estimate.
+    const hopAgain = () => {
+        listener.emit('response', { parameters: { 253: 2, 8: 'TNL-109', 9: [5, 780] } })
+        listener.emit('request', { parameters: { 253: 22, 1: [-70.2, 564.0], 3: [-75, 565] } })
+        listener.emit('response', { parameters: { 253: 2, 8: 'TNL-125', 66: 'TNL-109', 9: [239.47, 305] } })
+    }
+    const closes = Date.now() + 10 * 3600 * 1000
+    tracker.setTimer('TNL-109', 'instanceslot_03', closes)
+    assert.strictEqual(tracker.linkOf('TNL-125', 'instanceslot_02').expires, closes)
+    assert.strictEqual(new RoadTracker(new EventEmitter(), new Trails(null)).linkOf('TNL-125', 'instanceslot_02').expires, closes)
+    hopAgain()
+    assert.strictEqual(tracker.linkOf('TNL-109', 'instanceslot_03').expires, closes)
+    tracker.setTimer('TNL-109', 'instanceslot_03', Date.now() - 1)
+    assert.strictEqual(tracker.linkOf('TNL-109', 'instanceslot_03'), null)
+    hopAgain()
+    assert.strictEqual(tracker.linkOf('TNL-109', 'instanceslot_03').expires, undefined)
+
     // An empty portal spot stays closed until someone actually goes through it.
     tracker.markClosed('TNL-125', 'instanceslot_10')
     assert.ok(tracker.closedAt('TNL-125', 'instanceslot_10'))

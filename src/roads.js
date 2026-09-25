@@ -9,8 +9,10 @@ const JOIN = 2
 const MOVE = 22
 // Spawn and departure points sit a few units from the portal's layout position.
 const EXIT_RADIUS = 30
-// ponytail: fixed guess at how long a Roads portal stays open; the game has per-portal timers we don't read yet.
+// ponytail: guess at how long a Roads portal stays open, used until someone types its real timer on the map
+// (the game sends the timer encrypted, so it can't be read from packets).
 const STALE_MS = 3 * 60 * 60 * 1000
+const expiresOf = (link) => link.expires ?? link.t + STALE_MS
 // ponytail: an empty portal spot is skipped for this long, then checked again; real spawn times are unknown.
 const CLOSED_MS = 60 * 60 * 1000
 
@@ -31,7 +33,8 @@ const nearestExit = (zoneId, pos) => {
     return best
 }
 
-// roads.jsonl holds hops ({from, fromSlot, to, toSlot}) and empty portal spots ({zone, slot, closed}).
+// roads.jsonl holds hops ({from, fromSlot, to, toSlot}), empty portal spots ({zone, slot, closed})
+// and portal timers typed on the map ({zone, slot, expires}).
 const readLog = () => {
     const log = { links: new Map(), closed: new Map() }
     if (!fs.existsSync(LINKS_PATH)) return log
@@ -46,12 +49,23 @@ const addEntry = ({ links, closed }, entry) => {
         closed.set(`${entry.zone}|${entry.slot}`, entry.t)
         return
     }
+    if (entry.expires) {
+        const link = links.get(`${entry.zone}|${entry.slot}`)
+        if (!link) return
+        link.expires = entry.expires
+        const back = links.get(`${link.zone}|${link.slot}`)
+        if (back) back.expires = entry.expires
+        return
+    }
     for (const [zone, slot, other, otherSlot] of [
         [entry.from, entry.fromSlot, entry.to, entry.toSlot],
         [entry.to, entry.toSlot, entry.from, entry.fromSlot],
     ]) {
         if (!slot) continue
-        links.set(`${zone}|${slot}`, { zone: other, slot: otherSlot, t: entry.t })
+        // Going through the same portal again keeps its typed timer, as long as it hasn't run out.
+        const old = links.get(`${zone}|${slot}`)
+        const expires = old?.zone === other && old.expires > entry.t ? old.expires : undefined
+        links.set(`${zone}|${slot}`, { zone: other, slot: otherSlot, t: entry.t, expires })
         closed.delete(`${zone}|${slot}`)
     }
 }
@@ -107,7 +121,13 @@ class RoadTracker extends EventEmitter {
 
     linkOf(zoneId, slot) {
         const link = this.links.get(`${zoneId}|${slot}`)
-        return link && Date.now() - link.t < STALE_MS ? link : null
+        return link && Date.now() < expiresOf(link) ? link : null
+    }
+
+    setTimer(zoneId, slot, expires) {
+        const entry = { t: Date.now(), zone: zoneId, slot, expires }
+        fs.appendFileSync(LINKS_PATH, JSON.stringify(entry) + '\n')
+        addEntry(this.log, entry)
     }
 
     closedAt(zoneId, slot) {
@@ -167,4 +187,4 @@ class RoadTracker extends EventEmitter {
     }
 }
 
-module.exports = { RoadTracker, nearestExit, exitsOf, nameOf, STALE_MS }
+module.exports = { RoadTracker, nearestExit, exitsOf, nameOf, expiresOf, STALE_MS }

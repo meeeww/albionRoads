@@ -2,7 +2,7 @@ const http = require('http')
 const { networkInterfaces } = require('os')
 const zones = require('../data/zones.json')
 const ground = require('../data/ground.json')
-const { exitsOf, STALE_MS } = require('./roads')
+const { exitsOf, expiresOf } = require('./roads')
 const { CELL } = require('./road-paths')
 
 const PORT = Number(process.env.ROADS_PORT) || 4790
@@ -23,10 +23,12 @@ const zoneInfo = (tracker, id) => {
 const state = (tracker) => {
     const edges = new Map()
     for (const [key, link] of tracker.links) {
-        if (Date.now() - link.t > STALE_MS) continue
-        const zone = key.split('|')[0]
+        const [zone, slot] = key.split('|')
+        if (!tracker.linkOf(zone, slot)) continue
         const id = [zone, link.zone].sort().join('~')
-        if (!edges.has(id) || edges.get(id).t < link.t) edges.set(id, { a: zone, b: link.zone, t: link.t, expires: link.t + STALE_MS })
+        if (!edges.has(id) || edges.get(id).t < link.t) {
+            edges.set(id, { a: zone, b: link.zone, slot, t: link.t, expires: expiresOf(link), typed: Boolean(link.expires) })
+        }
     }
     const ids = new Set([...edges.values()].flatMap(({ a, b }) => [a, b]))
     if (tracker.zone) ids.add(tracker.zone)
@@ -47,6 +49,16 @@ const startRoadMap = (tracker) => {
             res.end(PAGE)
         } else if (url.pathname === '/api/state') {
             json(state(tracker))
+        } else if (url.pathname === '/api/timer' && req.method === 'POST') {
+            const zone = url.searchParams.get('zone') || ''
+            const slot = url.searchParams.get('slot') || ''
+            const left = Number(url.searchParams.get('left'))
+            if (!tracker.linkOf(zone, slot) || !(left > 0 && left < 48 * 3600 * 1000)) {
+                res.writeHead(400)
+                return res.end()
+            }
+            tracker.setTimer(zone, slot, Date.now() + left)
+            json({ ok: true })
         } else if (url.pathname === '/api/zone') {
             const id = url.searchParams.get('id') || ''
             const { walked, blocked } = tracker.trails.of(id)
@@ -92,13 +104,14 @@ const PAGE = `<!doctype html>
 <body>
 <header>
   <h1>Roads map</h1>
-  <p>Known roads and the portals between them. Links older than 3 hours drop off. Select a road to see its layout.</p>
+  <p>Known roads and the portals between them. Select a road to see its layout.</p>
 </header>
 <main>
   <section>
     <div class="row"><h2>Network</h2><span class="muted" id="summary"></span></div>
     <canvas id="net" width="900" height="900" style="touch-action:none"></canvas>
-    <p class="muted" style="margin:6px 0 0">Drag to move, scroll to zoom, double-click to reset. Times on the links count down to when they drop off.</p>
+    <p class="muted" style="margin:6px 0 0">Drag to move, scroll to zoom, double-click to reset. Times on the links count down to when the portal closes.
+      A <b>~</b> time is a 3-hour guess: click it and type the portal's real timer (like 15h26m).</p>
     <p class="legend" style="margin-top:8px">
       <span><i class="dot" style="background:#7dcea0"></i>T4</span>
       <span><i class="dot" style="background:#7eb6ff"></i>T5</span>
@@ -272,7 +285,7 @@ function drawNet() {
     const [ax, ay] = px(a), [bx, by] = px(b)
     nctx.beginPath(); nctx.moveTo(ax, ay); nctx.lineTo(bx, by); nctx.stroke()
     const [mx, my] = [(ax + bx) / 2, (ay + by) / 2]
-    const text = countdown(left)
+    const text = (e.typed ? '' : '~') + countdown(left)
     nctx.fillStyle = 'rgba(18, 20, 15, 0.8)'
     nctx.fillRect(mx - nctx.measureText(text).width / 2 - 4, my - 13, nctx.measureText(text).width + 8, 20)
     nctx.fillStyle = left < 15 * 60000 ? '#d36b6b' : '#e2c56a'
@@ -316,6 +329,12 @@ net.onpointerup = (event) => {
   drag = null
   if (wasDrag) return
   const [x, y] = canvasPoint(event)
+  const edge = data.edges.find((e) => {
+    if (!nodes[e.a] || !nodes[e.b]) return false
+    const [ax, ay] = nodePx(nodes[e.a]), [bx, by] = nodePx(nodes[e.b])
+    return Math.abs((ax + bx) / 2 - x) < 50 && Math.abs((ay + by) / 2 - y) < 16
+  })
+  if (edge) return askTimer(edge)
   let best = null, bestD = 40
   for (const [id, n] of Object.entries(nodes)) {
     const [nx, ny] = nodePx(n)
@@ -323,6 +342,23 @@ net.onpointerup = (event) => {
     if (d < bestD) { best = id; bestD = d }
   }
   if (best) { selected = best; loadZone(best) }
+}
+// "15h26m", "15h", "26m" or "15:26" to milliseconds, or null.
+const parseLeft = (text) => {
+  const m = String(text).trim().match(/^(?:(\\d+)\\s*h)?\\s*(?:(\\d+)\\s*m?)?$/i) || String(text).trim().match(/^(\\d+):(\\d+)$/)
+  const ms = m ? ((Number(m[1]) || 0) * 60 + (Number(m[2]) || 0)) * 60000 : 0
+  return ms > 0 ? ms : null
+}
+async function askTimer(edge) {
+  const names = (data.zones[edge.a]?.name || edge.a) + ' ↔ ' + (data.zones[edge.b]?.name || edge.b)
+  const answer = prompt('Time left on the portal ' + names + ' (like 15h26m):')
+  if (answer == null) return
+  const left = parseLeft(answer)
+  if (!left) return alert('Could not read "' + answer + '". Use something like 15h26m.')
+  const params = new URLSearchParams({ zone: edge.a, slot: edge.slot, left })
+  const res = await fetch('/api/timer?' + params, { method: 'POST' })
+  if (!res.ok) return alert('The server did not accept that timer.')
+  refresh()
 }
 net.onwheel = (event) => {
   event.preventDefault()
