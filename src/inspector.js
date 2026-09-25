@@ -434,9 +434,13 @@ function startInspector() {
         res.end()
     })
 
-    server.listen(PORT, '127.0.0.1', () => {
-        console.log(`Packet map: http://127.0.0.1:${PORT}`)
-        console.log(`Bite radar: http://127.0.0.1:${PORT}/radar`)
+    server.listen(PORT, '0.0.0.0', () => {
+        const hosts = Object.values(require('os').networkInterfaces()).flat()
+            .filter((detail) => detail.family === 'IPv4').map((detail) => detail.address)
+        for (const host of hosts) {
+            console.log(`Packet map: http://${host}:${PORT}`)
+            console.log(`Bite radar: http://${host}:${PORT}/radar`)
+        }
     })
 }
 
