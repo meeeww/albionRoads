@@ -14,6 +14,7 @@ const STEER_MS = 400
 const CLOSED_NEAR_UNITS = 120
 const NO_PROGRESS_MS = 20000
 const PORTAL_COOLDOWN_MS = 12000
+const AT_PORTAL_UNITS = 30
 const CALIBRATION_PX = [[180, 0], [0, 180], [-180, -180], [-150, 120]]
 // Least-squares fit of d = A * s + b over (screen offset -> world offset) samples.
 const solveAffine = (samples) => {
@@ -192,7 +193,9 @@ const explore = async (tracker) => {
             } else if (!open && closest < CLOSED_NEAR_UNITS && Date.now() - closerAt > NO_PROGRESS_MS) {
                 return 'closed'
             }
-            const step = planStep(tracker.trails, tracker.zone, tracker.pos, target, view.toScreen, STEP_PX)
+            // Right at the portal, planning only walks into its collider; clicking it walks the rest.
+            const step = distance() < AT_PORTAL_UNITS ? { final: true }
+                : planStep(tracker.trails, tracker.zone, tracker.pos, target, view.toScreen, STEP_PX)
             if (!step) return 'unreachable'
             if (step.final) {
                 // A portal refuses the player for several seconds after coming through one.

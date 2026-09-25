@@ -207,6 +207,44 @@ for (const zoneId of ['TNL-109', 'TNL-220']) {
     assert.deepStrictEqual(seen, ['undecoded', 7])
 }
 
+// Every portal is reached from 150 units away in a few straight legs that stay on the road, and walls bumped at a
+// portal (its own collider) are never learned.
+{
+    const zones = require('../data/zones.json')
+    const trails = new Trails(null)
+    for (const zoneId of ['TNL-109', 'TNL-220', 'TNL-066']) {
+        const { core } = groundOf(zoneId)
+        for (const exit of zones[zoneId].exits) {
+            const start = [...core].map((key) => key.split(',').map((v) => (Number(v) + 0.5) * CELL))
+                .filter((p) => Math.hypot(p[0] - exit.x, p[1] - exit.y) >= 150)
+                .sort((a, b) => Math.hypot(a[0] - exit.x, a[1] - exit.y) - Math.hypot(b[0] - exit.x, b[1] - exit.y))[0]
+            let pos = start
+            let legs = 0
+            for (let step; !(step = planStep(trails, zoneId, pos, [exit.x, exit.y], (d) => d, Infinity)).final; legs++) {
+                assert.ok(legs < 12, `${zoneId} exit (${exit.x}, ${exit.y}): no straight way in`)
+                pos = step.world
+            }
+        }
+        const exit = zones[zoneId].exits[0]
+        trails.markBlocked(zoneId, [exit.x + 10, exit.y])
+        assert.strictEqual(trails.isBlocked(zoneId, [exit.x + 10, exit.y]), false)
+    }
+}
+
+// Routes between portals keep to the main road where it goes round (Fynitos-Egoisum has side-path shortcuts).
+{
+    const zones = require('../data/zones.json')
+    const { main, core } = groundOf('TNL-232')
+    const exits = zones['TNL-232'].exits
+    for (let i = 0; i < exits.length; i++) {
+        for (let j = i + 1; j < exits.length; j++) {
+            const route = findPath(new Trails(null), 'TNL-232', [exits[i].x, exits[i].y], [exits[j].x, exits[j].y])
+            const side = route.filter((p) => { const key = p.map((v) => Math.floor(v / CELL)).join(); return core.has(key) && !main.has(key) })
+            assert.ok(side.length <= 5, `route ${i + 1} -> ${j + 1} takes a side path (${side.length} cells)`)
+        }
+    }
+}
+
 // The portal tooltip's time wins over the shorter "free to use" one, and OCR noise around it is ignored.
 {
     const { parseTimer } = require('../src/portal-timer')

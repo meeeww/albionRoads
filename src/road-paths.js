@@ -11,7 +11,8 @@ const UNKNOWN_COST = 1.25
 // With the zone's road pieces known: stay on the main road, take side paths reluctantly,
 // and leave the pieces only where they have gaps (piece edges, portals).
 const ROAD_COST = 1
-const OFFROAD_COST = 1.5
+// Side paths are narrow and cluttered: taken only when the main road is a long way round.
+const OFFROAD_COST = 4
 const OFF_GROUND_COST = 6
 // Railings, columns and rocks line the road edges: routes pay extra this close to an edge,
 // and straight lines must stay clear of it.
@@ -20,6 +21,12 @@ const EDGE_COST = 2
 // Portal pieces have no road piece under them, so a line may leave the road this close to an
 // end that is itself off the road.
 const OFF_GROUND_FREE = 40
+// Portals stand about 40 units past the road's end with no road piece in between; this wide a
+// corridor from the road to each portal is walkable road.
+const APPROACH_HALF_WIDTH = 12
+// A portal's collider stops the character like a wall; bumps this close to a portal learn nothing.
+const NO_WALLS_NEAR_EXIT = 40
+const nearExit = (zoneId, pos) => (zones[zoneId]?.exits || []).some((e) => Math.hypot(e.x - pos[0], e.y - pos[1]) < NO_WALLS_NEAR_EXIT)
 
 const cellOf = (pos) => [Math.floor(pos[0] / CELL), Math.floor(pos[1] / CELL)]
 const keyOf = (cx, cy) => `${cx},${cy}`
@@ -42,6 +49,22 @@ const groundOf = (zoneId) => {
                     }
                 }
             }
+            // ponytail: a straight corridor to the nearest road cell; a portal set at an angle to its road would need its piece's rotation.
+            const roadCells = [...cost.keys()].map((key) => centerOf(...key.split(',').map(Number)))
+            for (const exit of zones[zoneId].exits || []) {
+                let near = null
+                for (const cell of roadCells) {
+                    if (!near || Math.hypot(cell[0] - exit.x, cell[1] - exit.y) < Math.hypot(near[0] - exit.x, near[1] - exit.y)) near = cell
+                }
+                const length = Math.hypot(near[0] - exit.x, near[1] - exit.y) || 1
+                const [ux, uy] = [(near[0] - exit.x) / length, (near[1] - exit.y) / length]
+                for (let along = -APPROACH_HALF_WIDTH; along <= length + CELL * EDGE_CELLS; along += CELL / 2) {
+                    for (let across = -APPROACH_HALF_WIDTH; across <= APPROACH_HALF_WIDTH; across += CELL / 2) {
+                        const key = keyOf(...cellOf([exit.x + ux * along - uy * across, exit.y + uy * along + ux * across]))
+                        if (!cost.has(key)) cost.set(key, ROAD_COST)
+                    }
+                }
+            }
             const core = new Set()
             for (const key of cost.keys()) {
                 const [cx, cy] = key.split(',').map(Number)
@@ -51,8 +74,9 @@ const groundOf = (zoneId) => {
                 }
                 if (inside) core.add(key)
             }
+            const main = new Set([...core].filter((key) => cost.get(key) === ROAD_COST))
             for (const key of cost.keys()) if (!core.has(key)) cost.set(key, cost.get(key) + EDGE_COST)
-            out = { cost, core }
+            out = { cost, core, main }
         }
         groundCache.set(zoneId, out)
     }
@@ -66,7 +90,10 @@ class Trails {
         this.dirty = false
         if (file && fs.existsSync(file)) {
             for (const [id, { walked, blocked }] of Object.entries(JSON.parse(fs.readFileSync(file, 'utf8')))) {
-                this.zones[id] = { walked: new Set(walked), blocked: new Set(blocked) }
+                // Walls saved at portals by older versions were the portal's own collider.
+                const kept = blocked.filter((key) => !nearExit(id, centerOf(...key.split(',').map(Number))))
+                if (kept.length < blocked.length) this.dirty = true
+                this.zones[id] = { walked: new Set(walked), blocked: new Set(kept) }
             }
         }
     }
@@ -88,7 +115,7 @@ class Trails {
     markBlocked(zoneId, pos) {
         const zone = this.of(zoneId)
         const key = keyOf(...cellOf(pos))
-        if (zone.walked.has(key) || zone.blocked.has(key)) return
+        if (zone.walked.has(key) || zone.blocked.has(key) || nearExit(zoneId, pos)) return
         zone.blocked.add(key)
         this.dirty = true
     }
@@ -110,7 +137,10 @@ class Trails {
 // clear of the road edges, except near an end that is itself off the road (a portal). The last
 // cell and a half before b is skipped: a portal's own collider gets marked blocked.
 const clearLine = (trails, zoneId, a, b) => {
-    const core = groundOf(zoneId)?.core
+    const ground = groundOf(zoneId)
+    // Between two points on the main road, a straight line must not cut across a side path.
+    const onMain = (p) => ground.main.has(keyOf(...cellOf(p)))
+    const core = ground && (onMain(a) && onMain(b) ? ground.main : ground.core)
     const freeA = core && !core.has(keyOf(...cellOf(a))) ? OFF_GROUND_FREE : 0
     const freeB = core && !core.has(keyOf(...cellOf(b))) ? OFF_GROUND_FREE : 0
     const length = Math.hypot(b[0] - a[0], b[1] - a[1])
