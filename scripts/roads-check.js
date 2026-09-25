@@ -226,6 +226,12 @@ for (const zoneId of ['TNL-109', 'TNL-220']) {
                 pos = step.world
             }
         }
+        // Stepping back along the corridor lands on the road, clear of the frame pillars.
+        for (const e of zones[zoneId].exits) {
+            const [ux, uy] = groundOf(zoneId).approach[e.slot]
+            const lineUp = [e.x + ux * 35, e.y + uy * 35].map((v) => Math.floor(v / CELL)).join()
+            assert.ok(core.has(lineUp), `${zoneId} exit (${e.x}, ${e.y}): the line-up spot is off the road`)
+        }
         const exit = zones[zoneId].exits[0]
         trails.markBlocked(zoneId, [exit.x + 10, exit.y])
         assert.strictEqual(trails.isBlocked(zoneId, [exit.x + 10, exit.y]), false)

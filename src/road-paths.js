@@ -52,6 +52,8 @@ const groundOf = (zoneId) => {
             }
             // ponytail: a straight corridor to the nearest road cell; a portal set at an angle to its road would need its piece's rotation.
             const roadCells = [...cost.keys()].map((key) => centerOf(...key.split(',').map(Number)))
+            // Per exit slot, the unit direction from the portal out along its corridor.
+            const approach = {}
             for (const exit of zones[zoneId].exits || []) {
                 let near = null
                 for (const cell of roadCells) {
@@ -59,6 +61,7 @@ const groundOf = (zoneId) => {
                 }
                 const length = Math.hypot(near[0] - exit.x, near[1] - exit.y) || 1
                 const [ux, uy] = [(near[0] - exit.x) / length, (near[1] - exit.y) / length]
+                approach[exit.slot] = [ux, uy]
                 for (let along = -APPROACH_HALF_WIDTH; along <= length + CELL * EDGE_CELLS; along += CELL / 2) {
                     for (let across = -APPROACH_HALF_WIDTH; across <= APPROACH_HALF_WIDTH; across += CELL / 2) {
                         const key = keyOf(...cellOf([exit.x + ux * along - uy * across, exit.y + uy * along + ux * across]))
@@ -96,7 +99,7 @@ const groundOf = (zoneId) => {
                 }
             }
             for (const [key, d] of depth) cost.set(key, cost.get(key) + CENTER_COST / d)
-            out = { cost, core, main, depth }
+            out = { cost, core, main, depth, approach }
         }
         groundCache.set(zoneId, out)
     }

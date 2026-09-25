@@ -1,6 +1,6 @@
 const { once } = require('events')
 const { RoadTracker, exitsOf, nameOf, nearestExit } = require('../src/roads')
-const { planStep, markWallAhead, CELL } = require('../src/road-paths')
+const { planStep, markWallAhead, groundOf, CELL } = require('../src/road-paths')
 const { sleep } = require('../src/utils')
 
 const EXPLORE = process.argv.includes('--explore')
@@ -15,6 +15,7 @@ const CLOSED_NEAR_UNITS = 120
 const NO_PROGRESS_MS = 20000
 const PORTAL_COOLDOWN_MS = 12000
 const AT_PORTAL_UNITS = 30
+const REALIGN_UNITS = 35
 const CALIBRATION_PX = [[180, 0], [0, 180], [-180, -180], [-150, 120]]
 // Least-squares fit of d = A * s + b over (screen offset -> world offset) samples.
 const solveAffine = (samples) => {
@@ -202,9 +203,18 @@ const explore = async (tracker) => {
                 await sleep(Math.max(0, arrivedAt + PORTAL_COOLDOWN_MS - Date.now()))
                 const zone = withTimeout(tracker, 'zone', 20000)
                 // A portal ignores clicks for several seconds after coming through it, so keep clicking.
+                const axis = groundOf(tracker.zone)?.approach[exit.slot]
                 for (let tries = 0; tries < 10; tries++) {
+                    const before = tracker.pos
                     click(view.toScreen([target[0] - tracker.pos[0], target[1] - tracker.pos[1]]))
                     if (await Promise.race([zone, sleep(2000)])) return 'arrived'
+                    // Not moving means a frame pillar is in the way: step back to the middle of the
+                    // corridor and come at the portal straight.
+                    if (axis && Math.hypot(tracker.pos[0] - before[0], tracker.pos[1] - before[1]) < 2) {
+                        const lineUp = [target[0] + axis[0] * REALIGN_UNITS, target[1] + axis[1] * REALIGN_UNITS]
+                        click(view.toScreen([lineUp[0] - tracker.pos[0], lineUp[1] - tracker.pos[1]]))
+                        if (await Promise.race([zone, sleep(2500)])) return 'arrived'
+                    }
                 }
                 if (await zone) return 'arrived'
                 // A rejected click can walk the character off the portal; walk back and try again.
