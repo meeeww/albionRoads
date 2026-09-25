@@ -86,7 +86,10 @@ class PhotonPacket {
         if (body.length < 2) return
 
         const messageType = body[1]
-        if (messageType > 128) return
+        if (messageType > 128) {
+            this.parent.emit('encrypted', { messageType, length: body.length })
+            return
+        }
 
         const payload = new Reader(body.subarray(2))
         const raw = Buffer.from(body.subarray(0, Math.min(body.length, 384)))
