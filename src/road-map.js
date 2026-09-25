@@ -138,6 +138,7 @@ const images = {}
 const iconImage = (name) => {
   if (!images[name]) {
     images[name] = new Image()
+    images[name].crossOrigin = 'anonymous'
     images[name].onload = () => drawZone()
     images[name].src = ICONS + name + '.png'
   }
