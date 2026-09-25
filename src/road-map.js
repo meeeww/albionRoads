@@ -122,7 +122,8 @@ const zoneCanvas = document.getElementById('zone')
 const zctx = zoneCanvas.getContext('2d')
 let data = { zones: {}, edges: [] }
 let selected = null
-let rotation = 0
+// The game camera looks at the world turned 45°, the same angle albionRadar clicks with.
+let rotation = 45
 let zoneData = null
 const nodes = {}
 let view = { scale: 1, x: 0, y: 0 }
@@ -276,6 +277,7 @@ function drawZone() {
     zctx.fillStyle = PIECE[p.kind] || '#262b20'
     zctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size)
   }
+  for (const p of z.pieces) if (p.kind === 'DNG') label('dungeon', p.x, p.y, '#b48ef0')
   zctx.fillStyle = 'rgba(231, 225, 209, 0.55)'
   for (const key of z.walked) { const [cx, cy] = key.split(',').map(Number); zctx.fillRect(cx * z.cell, cy * z.cell, z.cell, z.cell) }
   zctx.fillStyle = '#d36b6b'

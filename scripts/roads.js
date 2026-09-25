@@ -7,19 +7,30 @@ const EXPLORE = process.argv.includes('--explore')
 // Clicks stay this many pixels from the character so they land on the ground, not the UI.
 const STEP_PX = 220
 const PORTAL_TIMEOUT_MS = 4 * 60 * 1000
-const CALIBRATION_PX = [[180, 0], [0, 180], [-180, -180]]
+const CALIBRATION_PX = [[180, 0], [0, 180], [-180, -180], [-150, 120]]
+// Calibration keeps the first clicks plus this many recent walking clicks.
+const RECENT_SAMPLES = 20
 
-// Solves d = A * s + b from three (screen offset -> world offset) samples.
+// Least-squares fit of d = A * s + b over (screen offset -> world offset) samples.
 const solveAffine = (samples) => {
     const det3 = (m) => m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
         - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
         + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
-    const rows = samples.map(({ s }) => [s[0], s[1], 1])
-    const det = det3(rows)
+    const normal = [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
+    const rhs = [[0, 0, 0], [0, 0, 0]]
+    for (const { s, d } of samples) {
+        const row = [s[0], s[1], 1]
+        for (let i = 0; i < 3; i++) {
+            for (let j = 0; j < 3; j++) normal[i][j] += row[i] * row[j]
+            rhs[0][i] += row[i] * d[0]
+            rhs[1][i] += row[i] * d[1]
+        }
+    }
+    const det = det3(normal)
     if (Math.abs(det) < 1e-9) throw new Error('Calibration clicks were collinear')
-    const solveFor = (axis) => [0, 1, 2].map((col) => det3(rows.map((row, i) => {
+    const solveFor = (axis) => [0, 1, 2].map((col) => det3(normal.map((row, i) => {
         const copy = [...row]
-        copy[col] = samples[i].d[axis]
+        copy[col] = rhs[axis][i]
         return copy
     })) / det)
     const [a, b, e] = solveFor(0)
@@ -59,20 +70,50 @@ const explore = async (tracker) => {
         robot.mouseClick('left')
     }
 
+    let lastTarget = null
+    tracker.on('move', ({ target }) => { if (target) lastTarget = target })
+    // Resolves with the first move whose target changed, so a position update still carrying the
+    // previous click's target isn't mistaken for the answer to this click.
+    const nextTarget = (ms) => new Promise((resolve) => {
+        const previous = lastTarget
+        const done = (move) => {
+            clearTimeout(timer)
+            tracker.off('move', onMove)
+            resolve(move)
+        }
+        const onMove = (move) => {
+            if (!move.target) return
+            if (previous && Math.hypot(move.target[0] - previous[0], move.target[1] - previous[1]) < 0.3) return
+            done(move)
+        }
+        const timer = setTimeout(() => done(null), ms)
+        tracker.on('move', onMove)
+    })
+
     win.setForeground()
     await sleep(500)
 
-    console.log('Calibrating: the character will take three short steps.')
-    const samples = []
+    console.log('Calibrating: the character will take four short steps.')
+    const firstSamples = []
     for (const s of CALIBRATION_PX) {
-        const waiting = withTimeout(tracker, 'move', 3000)
+        const waiting = nextTarget(3000)
         click(s)
         const move = await waiting
-        if (!move?.target) throw new Error('No move packet after a calibration click. Is the game focused?')
-        samples.push({ s, d: [move.target[0] - move.pos[0], move.target[1] - move.pos[1]] })
-        await sleep(800)
+        if (!move) throw new Error('No move packet after a calibration click. Is the game focused?')
+        firstSamples.push({ s, d: [move.target[0] - move.pos[0], move.target[1] - move.pos[1]] })
+        await sleep(1200)
     }
-    const view = solveAffine(samples)
+    let recentSamples = []
+    let view = solveAffine(firstSamples)
+
+    const learn = (s, move) => {
+        const d = [move.target[0] - move.pos[0], move.target[1] - move.pos[1]]
+        const predicted = view.toWorld(s)
+        const off = Math.hypot(predicted[0] - d[0], predicted[1] - d[1])
+        if (off > Math.max(3, Math.hypot(...d) * 0.25)) console.log(`Click landed ${off.toFixed(1)} units off, recalibrating.`)
+        recentSamples = [...recentSamples, { s, d }].slice(-RECENT_SAMPLES)
+        view = solveAffine([...firstSamples, ...recentSamples])
+    }
 
     const usePortal = async (exit) => {
         const target = [exit.x, exit.y]
@@ -87,8 +128,12 @@ const explore = async (tracker) => {
                 click(step.screen)
                 return await zone ? 'arrived' : 'closed'
             }
+            const clickedAt = Date.now()
+            const answer = nextTarget(700)
             click(step.screen)
-            await sleep(700)
+            const move = await answer
+            if (move) learn(step.screen, move)
+            await sleep(Math.max(0, 700 - (Date.now() - clickedAt)))
             const pos = tracker.pos
             if (Math.hypot(pos[0] - last[0], pos[1] - last[1]) < 0.8) {
                 if (++stuck >= 2) {
@@ -112,7 +157,9 @@ const explore = async (tracker) => {
             .sort((a, b) => Math.hypot(a.x - tracker.pos[0], a.y - tracker.pos[1]) - Math.hypot(b.x - tracker.pos[0], b.y - tracker.pos[1]))[0]
         if (!next) break
 
-        console.log(`\nWalking to exit (${next.x}, ${next.y})`)
+        const number = exitsOf(home).indexOf(next) + 1
+        const away = Math.hypot(next.x - tracker.pos[0], next.y - tracker.pos[1])
+        console.log(`\nWalking to unknown exit ${number} (${next.x}, ${next.y}), ${Math.round(away)} units away`)
         const result = await usePortal(next)
         if (result !== 'arrived') {
             console.log(result === 'closed'

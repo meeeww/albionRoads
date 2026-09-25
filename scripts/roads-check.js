@@ -18,6 +18,20 @@ for (const s of [[100, -40], [-220, 15]]) {
     assert.ok(Math.hypot(back[0] - s[0], back[1] - s[1]) < 1e-6, `round trip ${s}`)
 }
 
+// With several noisy clicks the least-squares fit still lands within a fraction of a unit.
+const noisy = [[180, 0], [0, 180], [-180, -180], [-150, 120], [200, 90], [-60, -210]]
+    .map((s, i) => ({ s, d: truth(s).map((v) => v + (i % 2 ? 0.2 : -0.2)) }))
+const fitted = solveAffine(noisy).toWorld([120, -80])
+assert.ok(Math.hypot(fitted[0] - truth([120, -80])[0], fitted[1] - truth([120, -80])[1]) < 0.5, 'noisy fit')
+
+// An old trail that leads elsewhere must not pull the route into a long detour.
+const detour = new Trails(null)
+for (let y = 0; y <= 200; y += 1) detour.markWalked('TNL-125', [0, y])
+for (let x = 0; x <= 200; x += 1) detour.markWalked('TNL-125', [x, 200])
+const route = findPath(detour, 'TNL-125', [0, 0], [200, 0])
+const routeLength = route.reduce((sum, p, i) => i ? sum + Math.hypot(p[0] - route[i - 1][0], p[1] - route[i - 1][1]) : 0, 0)
+assert.ok(routeLength < 260, `route went straight instead of along the old trail (${Math.round(routeLength)} units)`)
+
 const linksPath = path.join(__dirname, '..', 'roads.jsonl')
 const saved = fs.existsSync(linksPath) ? fs.readFileSync(linksPath) : null
 try {

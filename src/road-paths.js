@@ -5,8 +5,8 @@ const zones = require('../data/zones.json')
 const CELL = 4
 const TRAILS_PATH = path.join(__dirname, '..', 'trails.json')
 const WALKED_COST = 1
-// Unknown ground is allowed but costs more, so routes stick to places someone has already walked.
-const UNKNOWN_COST = 3
+// Unknown ground costs a little more, so routes use known trails only when they're nearly as short.
+const UNKNOWN_COST = 1.25
 
 const cellOf = (pos) => [Math.floor(pos[0] / CELL), Math.floor(pos[1] / CELL)]
 const keyOf = (cx, cy) => `${cx},${cy}`
