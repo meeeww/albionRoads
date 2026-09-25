@@ -111,12 +111,24 @@ const PAGE = `<!doctype html>
   <section>
     <div class="row"><h2 id="zoneTitle">No road selected</h2><button id="rotate" type="button">Rotate 45°</button></div>
     <canvas id="zone" width="900" height="900"></canvas>
+    <p id="spots" class="muted"></p>
     <ul id="exits"></ul>
   </section>
 </main>
 <script>
 const TIER = { 4: '#7dcea0', 5: '#7eb6ff', 6: '#b48ef0', 7: '#e39b54', 8: '#d36b6b' }
 const PIECE = { Portal: '#6a5a2c', RES: '#2f4a2a', PVE: '#4a2a2a', DNG: '#3b2d4d' }
+// What spawns at a piece, from its layout name: RES_OreRock, PVE_SOLO (a boss that drops a chest), DNG_GROUP_Entrance.
+const SIZE = { SOLO: 'solo', GROUP: 'group', RAID: 'raid' }
+const spotOf = (p) => {
+  const res = p.name?.match(/^RES_([A-Z][a-z]+)([A-Z][a-z]+)$/)
+  if (res) return { group: 'Resources', text: res[1] + ' + ' + res[2], color: '#7dcea0' }
+  const pve = p.name?.match(/^PVE_(SOLO|GROUP|RAID)$/)
+  if (pve) return { group: 'Chests', text: SIZE[pve[1]] + ' chest', color: '#e39b54' }
+  const dng = p.name?.match(/^DNG_(SOLO|GROUP|RAID)_Entrance$/)
+  if (dng) return { group: 'Dungeons', text: SIZE[dng[1]] + ' dungeon', color: '#b48ef0' }
+  return null
+}
 const net = document.getElementById('net')
 const nctx = net.getContext('2d')
 const zoneCanvas = document.getElementById('zone')
@@ -150,6 +162,13 @@ async function loadZone(id) {
   zoneData = await fetch('/api/zone?id=' + encodeURIComponent(id)).then((r) => r.json())
   const known = zoneData.exits.filter((e) => e.link).length
   document.getElementById('zoneTitle').textContent = zoneData.name + (zoneData.exits.length ? ' (' + known + '/' + zoneData.exits.length + ' exits known)' : '')
+  const groups = {}
+  for (const spot of zoneData.pieces.map(spotOf).filter(Boolean)) {
+    const counts = groups[spot.group] ||= {}
+    counts[spot.text] = (counts[spot.text] || 0) + 1
+  }
+  document.getElementById('spots').innerHTML = Object.entries(groups).map(([group, counts]) =>
+    '<b>' + group + ':</b> ' + Object.entries(counts).map(([text, n]) => (n > 1 ? n + '× ' : '') + esc(text)).join(', ')).join(' · ')
   document.getElementById('exits').innerHTML = zoneData.exits.map((e, i) => {
     const where = e.kind === 'mistscityentrance' ? '<span class="muted">mists city entrance</span>'
       : e.link ? '<a data-zone="' + esc(e.link.zone) + '">' + esc(data.zones[e.link.zone]?.name || e.link.zone) + '</a> <span class="muted">' + ago(e.link.t) + '</span>'
@@ -283,7 +302,7 @@ function drawZone() {
     zctx.fillStyle = offroad ? '#343a2a' : '#5a5440'
     zctx.fillRect(x - w / 2, y - d / 2, w, d)
   }
-  for (const p of z.pieces) if (p.kind === 'DNG') label('dungeon', p.x, p.y, '#b48ef0')
+  for (const p of z.pieces) { const spot = spotOf(p); if (spot) label(spot.text, p.x, p.y, spot.color) }
   zctx.fillStyle = 'rgba(231, 225, 209, 0.55)'
   for (const key of z.walked) { const [cx, cy] = key.split(',').map(Number); zctx.fillRect(cx * z.cell, cy * z.cell, z.cell, z.cell) }
   zctx.fillStyle = '#d36b6b'
