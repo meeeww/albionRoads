@@ -2,6 +2,9 @@
   "scripts": {
     "start": "node app.js",
     "packets": "node ./scripts/read-packets.js",
+    "roads": "node ./scripts/roads.js",
+    "roads:build": "node ./scripts/build-roads.js",
+    "roads:check": "node ./scripts/roads-check.js",
     "pixel-coor-test": "node ./scripts/pixel-coor-test.js"
   },
   "dependencies": {
