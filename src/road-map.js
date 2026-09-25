@@ -1,6 +1,7 @@
 const http = require('http')
 const { networkInterfaces } = require('os')
 const zones = require('../data/zones.json')
+const ground = require('../data/ground.json')
 const { exitsOf, STALE_MS } = require('./roads')
 const { CELL } = require('./road-paths')
 
@@ -49,7 +50,7 @@ const startRoadMap = (tracker) => {
         } else if (url.pathname === '/api/zone') {
             const id = url.searchParams.get('id') || ''
             const { walked, blocked } = tracker.trails.of(id)
-            json({ id, ...zoneInfo(tracker, id), cell: CELL, walked: [...walked], blocked: [...blocked] })
+            json({ id, ...zoneInfo(tracker, id), ground: ground[zones[id]?.layout] || [], cell: CELL, walked: [...walked], blocked: [...blocked] })
         } else {
             res.writeHead(404)
             res.end()
@@ -277,6 +278,10 @@ function drawZone() {
   for (const p of z.pieces) {
     zctx.fillStyle = PIECE[p.kind] || '#262b20'
     zctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size)
+  }
+  for (const [x, y, w, d, offroad] of z.ground) {
+    zctx.fillStyle = offroad ? '#343a2a' : '#5a5440'
+    zctx.fillRect(x - w / 2, y - d / 2, w, d)
   }
   for (const p of z.pieces) if (p.kind === 'DNG') label('dungeon', p.x, p.y, '#b48ef0')
   zctx.fillStyle = 'rgba(231, 225, 209, 0.55)'

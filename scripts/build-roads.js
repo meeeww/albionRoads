@@ -5,10 +5,69 @@ const path = require('path')
 
 const BASE = 'https://raw.githubusercontent.com/ao-data/ao-bin-dumps/master/cluster/'
 
-const get = async (file) => {
-    const res = await fetch(BASE + file)
+const TEMPLATES = 'https://raw.githubusercontent.com/ao-data/ao-bin-dumps/master/templates/'
+// Unity turns a piece clockwise seen from above; checked by every road's exits connecting over its ground.
+const ROT_SIGN = 1
+
+const get = async (file, base = BASE) => {
+    const res = await fetch(base + file)
     if (!res.ok) throw new Error(`${file}: HTTP ${res.status}`)
     return res.text()
+}
+
+// Road pieces of one template as [layerId | null, x, z, width, depth, offroad], rotated into the template's frame.
+// ROAD and TRANS pieces are the main road, OFFROAD the side paths; BACKDROP pieces (trees, rock walls) are not walkable.
+// ponytail: an S-curve or corner counts as its whole bounding box; walls learned while walking cover the rest.
+const parseGround = (text) => {
+    const tiles = []
+    let layer = null
+    const pattern = /<layer id="([^"]+)"|<\/layer>|<compoundtile name="_ROADS_[A-Z]+_(ROAD|TRANS|OFFROAD)_[^"]*?(\d+)x(\d+)[^"]*" pos="(-?[\d.]+) -?[\d.]+ (-?[\d.]+)"([^>]*)>/g
+    for (const [token, layerId, kind, w, h, x, z, rest] of text.matchAll(pattern)) {
+        if (layerId) layer = layerId
+        else if (token === '</layer>') layer = null
+        else {
+            const rot = Number(rest.match(/roty="([^"]+)"/)?.[1] ?? 0)
+            const turned = Math.round(rot / 90) % 2 !== 0
+            tiles.push([layer, Number(x), Number(z), Number(turned ? h : w), Number(turned ? w : h), kind === 'OFFROAD' ? 1 : 0])
+        }
+    }
+    return tiles
+}
+
+// Walkable road surface of a zone layout as [centerX, centerY, width, depth, offroad] rectangles.
+const groundOf = (layout, templateGround, sign = ROT_SIGN) => {
+    const rects = []
+    const pattern = /<templateinstance id="[^"]+" ref="([^"]+)"([^>]*?)(?:\/>|>([\s\S]*?)<\/templateinstance>)/g
+    for (const [, ref, attrs, body = ''] of layout.matchAll(pattern)) {
+        const tiles = templateGround[ref]
+        if (!tiles) continue
+        const [px, , pz] = attrs.match(/pos="([^"]+)"/)[1].split(' ').map(Number)
+        const rot = Number(attrs.match(/rot="([^"]+)"/)?.[1] || 0)
+        const active = new Set([...body.matchAll(/<activelayer id="([^"]+)"/g)].map((m) => m[1]))
+        const angle = sign * rot * Math.PI / 180
+        const cos = Math.round(Math.cos(angle))
+        const sin = Math.round(Math.sin(angle))
+        const turned = Math.round(rot / 90) % 2 !== 0
+        for (const [layer, x, z, w, d, offroad] of tiles) {
+            if (layer && !active.has(layer)) continue
+            rects.push([px + x * cos + z * sin, pz - x * sin + z * cos, turned ? d : w, turned ? w : d, offroad])
+        }
+    }
+    return rects
+}
+
+const templateGroundFor = async (refs) => {
+    const tree = await (await fetch('https://api.github.com/repos/ao-data/ao-bin-dumps/git/trees/master?recursive=1')).json()
+    const paths = {}
+    for (const { path: p } of tree.tree) {
+        const m = p.match(/^templates\/([^/]+)\/(.+)\.template\.xml$/)
+        if (m && (!paths[m[2]] || m[1] === 'NONE')) paths[m[2]] = `${m[1]}/${m[2]}.template.xml`
+    }
+    const out = {}
+    await Promise.all([...refs].filter((ref) => paths[ref]).map(async (ref) => {
+        out[ref] = parseGround(await get(paths[ref], TEMPLATES))
+    }))
+    return out
 }
 
 const main = async () => {
@@ -38,9 +97,11 @@ const main = async () => {
     const ids = Object.keys(exitSlots)
     console.log(`${Object.keys(zones).length} zones, ${ids.length} with road exits`)
 
+    const layouts = {}
     for (let i = 0; i < ids.length; i += 16) {
         await Promise.all(ids.slice(i, i + 16).map(async (id) => {
             const layout = await get(zones[id].file)
+            layouts[zones[id].file] = layout
             const positions = {}
             const pieces = []
             for (const [, slot, ref, x, y] of layout.matchAll(/<templateinstance id="([^"]+)" ref="([^"]+)"[^>]*? pos="(-?[\d.]+) -?[\d.]+ (-?[\d.]+)"/g)) {
@@ -57,17 +118,28 @@ const main = async () => {
         }))
     }
 
+    const refs = new Set(Object.values(layouts).flatMap((layout) => [...layout.matchAll(/ref="([^"]+)"/g)].map((m) => m[1])))
+    const templateGround = await templateGroundFor(refs)
+    const ground = {}
+    for (const [file, layout] of Object.entries(layouts)) ground[file] = groundOf(layout, templateGround)
+
     const out = {}
-    for (const [id, { name, type, tier, origin, size, exits, pieces }] of Object.entries(zones)) {
-        out[id] = exits ? { name, type, tier, origin, size, exits, pieces } : { name }
+    for (const [id, { name, type, tier, origin, size, exits, pieces, file }] of Object.entries(zones)) {
+        out[id] = exits ? { name, type, tier, origin, size, exits, pieces, layout: file } : { name }
     }
-    const outPath = path.join(__dirname, '..', 'data', 'zones.json')
-    fs.mkdirSync(path.dirname(outPath), { recursive: true })
-    fs.writeFileSync(outPath, JSON.stringify(out))
-    console.log(`\nWrote ${outPath}`)
+    const dataDir = path.join(__dirname, '..', 'data')
+    fs.mkdirSync(dataDir, { recursive: true })
+    fs.writeFileSync(path.join(dataDir, 'zones.json'), JSON.stringify(out))
+    fs.writeFileSync(path.join(dataDir, 'ground.json'), JSON.stringify(ground))
+    console.log(`Wrote zones.json and ground.json (${Object.keys(ground).length} layouts) to ${dataDir}`)
+    return { zones: out, ground, layouts, templateGround }
 }
 
-main().catch((error) => {
-    console.error(error.message)
-    process.exit(1)
-})
+if (require.main === module) {
+    main().catch((error) => {
+        console.error(error.message)
+        process.exit(1)
+    })
+}
+
+module.exports = { main, groundOf }

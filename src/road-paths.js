@@ -1,16 +1,46 @@
 const fs = require('fs')
 const path = require('path')
 const zones = require('../data/zones.json')
+const ground = require('../data/ground.json')
 
 const CELL = 4
 const TRAILS_PATH = path.join(__dirname, '..', 'trails.json')
 const WALKED_COST = 1
 // Unknown ground costs a little more, so routes use known trails only when they're nearly as short.
 const UNKNOWN_COST = 1.25
+// With the zone's road pieces known: stay on the main road, take side paths reluctantly,
+// and leave the pieces only where they have gaps (piece edges, portals).
+const ROAD_COST = 1
+const OFFROAD_COST = 1.5
+const OFF_GROUND_COST = 6
+// Portal pieces have no road piece under them, so lines may leave the road this close to either end.
+const OFF_GROUND_FREE = 40
 
 const cellOf = (pos) => [Math.floor(pos[0] / CELL), Math.floor(pos[1] / CELL)]
 const keyOf = (cx, cy) => `${cx},${cy}`
 const centerOf = (cx, cy) => [(cx + 0.5) * CELL, (cy + 0.5) * CELL]
+
+// Cell key -> cost for every cell under a road piece of the zone, or null when the zone has none.
+const groundCache = new Map()
+const groundOf = (zoneId) => {
+    if (!groundCache.has(zoneId)) {
+        const rects = ground[zones[zoneId]?.layout]
+        let cells = null
+        if (rects?.length) {
+            cells = new Map()
+            for (const [x, y, w, d, offroad] of rects) {
+                for (let cx = Math.floor((x - w / 2) / CELL); cx < Math.ceil((x + w / 2) / CELL); cx++) {
+                    for (let cy = Math.floor((y - d / 2) / CELL); cy < Math.ceil((y + d / 2) / CELL); cy++) {
+                        const key = keyOf(cx, cy)
+                        if (!offroad || !cells.has(key)) cells.set(key, offroad ? OFFROAD_COST : ROAD_COST)
+                    }
+                }
+            }
+        }
+        groundCache.set(zoneId, cells)
+    }
+    return groundCache.get(zoneId)
+}
 
 class Trails {
     constructor(file = TRAILS_PATH) {
@@ -59,15 +89,22 @@ class Trails {
     }
 }
 
-// Line of sight over the grid: true when no blocked cell sits between a and b.
-// The last cell and a half before b is skipped: a portal's own collider gets marked blocked.
+// Line of sight over the grid: true when no blocked cell sits between a and b, and the line stays
+// on road pieces or walked ground away from its ends. The last cell and a half before b is
+// skipped: a portal's own collider gets marked blocked.
 const clearLine = (trails, zoneId, a, b) => {
+    const cells = groundOf(zoneId)
+    const { walked } = trails.of(zoneId)
     const length = Math.hypot(b[0] - a[0], b[1] - a[1])
     const steps = Math.ceil(length / (CELL / 2))
     for (let i = 1; i <= steps; i++) {
         const t = i / steps
         if (length * (1 - t) < CELL * 1.5) break
-        if (trails.isBlocked(zoneId, [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t])) return false
+        const point = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+        if (trails.isBlocked(zoneId, point)) return false
+        const key = keyOf(...cellOf(point))
+        const nearEnd = length * Math.min(t, 1 - t) < OFF_GROUND_FREE
+        if (cells && !nearEnd && !cells.has(key) && !walked.has(key)) return false
     }
     return true
 }
@@ -127,6 +164,8 @@ const markWallAhead = (trails, zoneId, pos, toward) => {
 // A* from `from` to within `reach` units of `to`. Returns world waypoints, or null when walled off.
 const findPath = (trails, zoneId, from, to, reach = CELL * 2) => {
     const { walked, blocked } = trails.of(zoneId)
+    const cells = groundOf(zoneId)
+    const costOf = (key) => walked.has(key) ? WALKED_COST : cells ? cells.get(key) ?? OFF_GROUND_COST : UNKNOWN_COST
     const bounds = zones[zoneId]?.origin && zones[zoneId]?.size
         ? [zones[zoneId].origin, zones[zoneId].size]
         : null
@@ -169,7 +208,7 @@ const findPath = (trails, zoneId, from, to, reach = CELL * 2) => {
                 const nkey = keyOf(nx, ny)
                 if (blocked.has(nkey) || !inBounds(nx, ny)) continue
                 if (dx && dy && (blocked.has(keyOf(cx + dx, cy)) || blocked.has(keyOf(cx, cy + dy)))) continue
-                const step = (walked.has(nkey) ? WALKED_COST : UNKNOWN_COST) * (dx && dy ? Math.SQRT2 : 1)
+                const step = costOf(nkey) * (dx && dy ? Math.SQRT2 : 1)
                 const ng = g + step
                 if (ng >= (cost.get(nkey) ?? Infinity)) continue
                 cost.set(nkey, ng)
@@ -210,4 +249,4 @@ const pop = (heap) => {
     return top
 }
 
-module.exports = { Trails, findPath, clearLine, planStep, markWallAhead, CELL }
+module.exports = { Trails, findPath, clearLine, planStep, markWallAhead, groundOf, CELL }

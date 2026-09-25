@@ -3,7 +3,7 @@ const { EventEmitter } = require('events')
 const fs = require('fs')
 const path = require('path')
 const { RoadTracker, nearestExit } = require('../src/roads')
-const { Trails, planStep, markWallAhead, findPath } = require('../src/road-paths')
+const { Trails, planStep, markWallAhead, findPath, clearLine, groundOf, CELL } = require('../src/road-paths')
 const { solveAffine } = require('./roads')
 
 // Every road has exits, including roads that reuse another road's layout file.
@@ -32,9 +32,9 @@ assert.ok(Math.hypot(fitted[0] - truth([120, -80])[0], fitted[1] - truth([120, -
 
 // An old trail that leads elsewhere must not pull the route into a long detour.
 const detour = new Trails(null)
-for (let y = 0; y <= 200; y += 1) detour.markWalked('TNL-125', [0, y])
-for (let x = 0; x <= 200; x += 1) detour.markWalked('TNL-125', [x, 200])
-const route = findPath(detour, 'TNL-125', [0, 0], [200, 0])
+for (let y = 0; y <= 200; y += 1) detour.markWalked('NO-GROUND', [0, y])
+for (let x = 0; x <= 200; x += 1) detour.markWalked('NO-GROUND', [x, 200])
+const route = findPath(detour, 'NO-GROUND', [0, 0], [200, 0])
 const routeLength = route.reduce((sum, p, i) => i ? sum + Math.hypot(p[0] - route[i - 1][0], p[1] - route[i - 1][1]) : 0, 0)
 assert.ok(routeLength < 260, `route went straight instead of along the old trail (${Math.round(routeLength)} units)`)
 
@@ -64,7 +64,7 @@ try {
 
 // With nothing known in the way, a far portal is aimed at in a straight line, not a 45° grid zig-zag.
 {
-    const aim = planStep(new Trails(null), 'TNL-125', [0, 0], [300, 90], ([dx, dy]) => [dx * 10, -dy * 10], 220)
+    const aim = planStep(new Trails(null), 'NO-GROUND', [0, 0], [300, 90], ([dx, dy]) => [dx * 10, -dy * 10], 220)
     const angle = Math.atan2(-aim.screen[1], aim.screen[0]) - Math.atan2(90, 300)
     assert.ok(Math.abs(angle) < 0.01, `aimed ${(angle * 180 / Math.PI).toFixed(1)}° off the straight line`)
     assert.ok(Math.abs(Math.hypot(...aim.screen) - 220) < 1e-6, 'aim stays within the step radius')
@@ -81,7 +81,7 @@ const hitsWall = (a, b) => {
     return false
 }
 const trails = new Trails(null)
-const zone = 'TNL-125'
+const zone = 'NO-GROUND'
 const toScreen = ([dx, dy]) => [dx * 10, -dy * 10]
 const target = [140, 300]
 let pos = [60, 300]
@@ -116,5 +116,22 @@ for (let i = 0; i < 600 && !reached; i++) {
 assert.ok(reached, `walker got around the wall (stopped at ${pos.map(Math.round)})`)
 assert.ok(trails.of(zone).blocked.size > 0, 'the wall was learned')
 assert.ok(findPath(trails, zone, [60, 300], target).every(([x, y]) => !(x > 98 && x < 102 && y > 200 && y < 400)))
+
+// Routes between real portals follow the road pieces instead of cutting across to the portal.
+{
+    const cells = groundOf('TNL-109')
+    const exits = zones['TNL-109'].exits
+    for (const [a, b] of [[exits[0], exits[exits.length - 1]], [exits[1], exits[2]]]) {
+        const from = [a.x, a.y]
+        const to = [b.x, b.y]
+        const path = findPath(new Trails(null), 'TNL-109', from, to)
+        assert.ok(path, `route ${a.slot} -> ${b.slot}`)
+        const offRoad = path.filter((p) => !cells.has(p.map((v) => Math.floor(v / CELL)).join()) &&
+            Math.hypot(p[0] - from[0], p[1] - from[1]) > 40 && Math.hypot(p[0] - to[0], p[1] - to[1]) > 40)
+        assert.ok(offRoad.length <= path.length * 0.05, `${offRoad.length}/${path.length} route cells off the road ${a.slot} -> ${b.slot}`)
+        const aim = planStep(new Trails(null), 'TNL-109', from, to, ([dx, dy]) => [dx * 10, -dy * 10], 220)
+        assert.ok(clearLine(new Trails(null), 'TNL-109', from, aim.world), 'first aim stays on the road')
+    }
+}
 
 console.log('roads check ok')
