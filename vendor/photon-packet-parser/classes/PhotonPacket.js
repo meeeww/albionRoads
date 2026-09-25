@@ -29,6 +29,7 @@ class PhotonPacket {
         reader.skip(8)
 
         if (flags === 1) {
+            this.parent.emit('encrypted', { length: buffer.length })
             this.consumed = buffer.length
             return
         }
@@ -71,7 +72,17 @@ class PhotonPacket {
         }
     }
 
+    // One message that fails to decode must not take the rest of the packet with it.
     handleReliable(body) {
+        try {
+            this.decodeReliable(body)
+        } catch (error) {
+            if (!(error instanceof ShortRead)) throw error
+            this.parent.emit('undecoded', { messageType: body[1], length: body.length, hex: body.subarray(0, 512).toString('hex') })
+        }
+    }
+
+    decodeReliable(body) {
         if (body.length < 2) return
 
         const messageType = body[1]

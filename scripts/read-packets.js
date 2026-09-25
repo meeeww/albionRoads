@@ -25,3 +25,7 @@ for (const kind of ['event', 'request', 'response']) {
         recordMessage(kind, message)
     })
 }
+// Messages the parser couldn't read, kept raw so a missing one (like a portal's timer) can still be found.
+for (const kind of ['undecoded', 'encrypted']) {
+    listener.on(kind, (info) => dump.write(JSON.stringify({ t: Date.now(), kind, ...info }) + '\n'))
+}

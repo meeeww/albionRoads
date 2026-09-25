@@ -168,4 +168,25 @@ for (const zoneId of ['TNL-109', 'TNL-220']) {
     assert.ok(!clearLine(new Trails(null), zoneId, ...cut), `corner cut near an on-road waypoint is rejected in ${zoneId}`)
 }
 
+// A message the parser can't read is reported, and the next message in the same packet still arrives.
+{
+    const PhotonParser = require('../vendor/photon-packet-parser')
+    const command = (payload) => {
+        const body = Buffer.from([0xf3, 4, ...payload])
+        const header = Buffer.alloc(12)
+        header[0] = 6
+        header.writeUInt32BE(12 + body.length, 4)
+        return Buffer.concat([header, body])
+    }
+    const packetHeader = Buffer.from([0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0])
+    const broken = command([1, 1, 5, 1]) // parameter 5 with a type code the parser doesn't know
+    const good = command([1, 1, 252, 3, 7]) // event code 7
+    const parser = new PhotonParser()
+    const seen = []
+    parser.on('undecoded', () => seen.push('undecoded'))
+    parser.on('event', (event) => seen.push(event.parameters[252]))
+    parser.handle(Buffer.concat([packetHeader, broken, good]))
+    assert.deepStrictEqual(seen, ['undecoded', 7])
+}
+
 console.log('roads check ok')

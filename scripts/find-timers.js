@@ -23,11 +23,14 @@ const walk = (value, keyPath, message) => {
 }
 
 const file = path.join(__dirname, '..', 'packets.jsonl')
+const unread = { undecoded: 0, encrypted: 0 }
 for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
     if (!line.trim()) continue
     const message = JSON.parse(line)
+    if (message.kind in unread) unread[message.kind]++
     walk(message.parameters, 'parameters', message)
 }
+console.log(`Unreadable messages: ${unread.undecoded} undecoded, ${unread.encrypted} encrypted packets.`)
 
 for (const { message, keyPath, ahead } of found) {
     const code = message.kind === 'event' ? message.parameters[252] : message.parameters[253]
