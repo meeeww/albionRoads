@@ -14,10 +14,10 @@ const ROAD_COST = 1
 // Side paths are narrow and cluttered: taken only when the main road is a long way round.
 const OFFROAD_COST = 4
 const OFF_GROUND_COST = 6
-// Railings, columns and rocks line the road edges: routes pay extra this close to an edge,
-// and straight lines must stay clear of it.
+// Railings, columns and rocks line the road edges: straight lines must stay this many cells clear
+// of an edge, and routes pay CENTER_COST / (cells from the edge), so they run down the middle.
 const EDGE_CELLS = 2
-const EDGE_COST = 2
+const CENTER_COST = 4
 // Portal pieces have no road piece under them, so a line may leave the road this close to an
 // end that is itself off the road.
 const OFF_GROUND_FREE = 40
@@ -28,6 +28,7 @@ const APPROACH_HALF_WIDTH = 12
 const NO_WALLS_NEAR_EXIT = 40
 const nearExit = (zoneId, pos) => (zones[zoneId]?.exits || []).some((e) => Math.hypot(e.x - pos[0], e.y - pos[1]) < NO_WALLS_NEAR_EXIT)
 
+const NEIGHBORS = [[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]]
 const cellOf = (pos) => [Math.floor(pos[0] / CELL), Math.floor(pos[1] / CELL)]
 const keyOf = (cx, cy) => `${cx},${cy}`
 const centerOf = (cx, cy) => [(cx + 0.5) * CELL, (cy + 0.5) * CELL]
@@ -75,7 +76,26 @@ const groundOf = (zoneId) => {
                 if (inside) core.add(key)
             }
             const main = new Set([...core].filter((key) => cost.get(key) === ROAD_COST))
-            for (const key of cost.keys()) if (!core.has(key)) cost.set(key, cost.get(key) + EDGE_COST)
+            // Cells from the nearest edge, by a breadth-first walk in from the cells that touch one.
+            const depth = new Map()
+            const queue = []
+            for (const key of cost.keys()) {
+                const [cx, cy] = key.split(',').map(Number)
+                if (NEIGHBORS.some(([dx, dy]) => !cost.has(keyOf(cx + dx, cy + dy)))) {
+                    depth.set(key, 1)
+                    queue.push([cx, cy])
+                }
+            }
+            for (let i = 0; i < queue.length; i++) {
+                const [cx, cy] = queue[i]
+                for (const [dx, dy] of NEIGHBORS) {
+                    const key = keyOf(cx + dx, cy + dy)
+                    if (!cost.has(key) || depth.has(key)) continue
+                    depth.set(key, depth.get(keyOf(cx, cy)) + 1)
+                    queue.push([cx + dx, cy + dy])
+                }
+            }
+            for (const [key, d] of depth) cost.set(key, cost.get(key) + CENTER_COST / d)
             out = { cost, core, main }
         }
         groundCache.set(zoneId, out)
