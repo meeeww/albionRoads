@@ -12,12 +12,12 @@ const UNKNOWN_COST = 1.25
 // and leave the pieces only where they have gaps (piece edges, portals).
 const ROAD_COST = 1
 // Side paths are narrow and cluttered: taken only when the main road is a long way round.
-const OFFROAD_COST = 4
-const OFF_GROUND_COST = 6
+const OFFROAD_COST = 8
+const OFF_GROUND_COST = 12
 // Railings, columns and rocks line the road edges: straight lines must stay this many cells clear
 // of an edge, and routes pay CENTER_COST / (cells from the edge), so they run down the middle.
 const EDGE_CELLS = 2
-const CENTER_COST = 4
+const CENTER_COST = 3
 // Portal pieces have no road piece under them, so a line may leave the road this close to an
 // end that is itself off the road.
 const OFF_GROUND_FREE = 40
@@ -96,7 +96,7 @@ const groundOf = (zoneId) => {
                 }
             }
             for (const [key, d] of depth) cost.set(key, cost.get(key) + CENTER_COST / d)
-            out = { cost, core, main }
+            out = { cost, core, main, depth }
         }
         groundCache.set(zoneId, out)
     }

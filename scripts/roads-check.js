@@ -179,7 +179,8 @@ for (const zoneId of ['TNL-109', 'TNL-220']) {
                 const p = [a[0] + (b[0] - a[0]) * s * 2 / length, a[1] + (b[1] - a[1]) * s * 2 / length]
                 if (!onCore(p)) off.push(length - s * 2)
             }
-            if (off.length && off.every((d) => d < 40 && d > CELL * 2)) cut = [a, b]
+            // Three samples (6 units) off the road; a line grazing one cell's corner isn't a cut.
+            if (off.length >= 3 && off.every((d) => d < 40 && d > CELL * 2)) cut = [a, b]
         }
     }
     assert.ok(cut, `found a corner cut in ${zoneId}`)
@@ -243,6 +244,18 @@ for (const zoneId of ['TNL-109', 'TNL-220']) {
             assert.ok(side.length <= 5, `route ${i + 1} -> ${j + 1} takes a side path (${side.length} cells)`)
         }
     }
+}
+
+// Routes run down the middle of the road: most route cells are as far from the edges as any neighbor.
+{
+    const zones = require('../data/zones.json')
+    const { depth } = groundOf('TNL-109')
+    const exits = zones['TNL-109'].exits
+    const route = findPath(new Trails(null), 'TNL-109', [exits[0].x, exits[0].y], [exits[5].x, exits[5].y])
+        .map((p) => p.map((v) => Math.floor(v / CELL)))
+    const centered = route.filter(([cx, cy]) => [-1, 0, 1].every((dx) => [-1, 0, 1].every((dy) =>
+        (depth.get(`${cx + dx},${cy + dy}`) || 0) <= depth.get(`${cx},${cy}`)))).length
+    assert.ok(centered >= route.length * 0.7, `only ${centered}/${route.length} route cells on the road's center line`)
 }
 
 // The portal tooltip's time wins over the shorter "free to use" one, and OCR noise around it is ignored.
