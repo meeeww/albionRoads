@@ -62,6 +62,14 @@ try {
     else fs.rmSync(linksPath, { force: true })
 }
 
+// With nothing known in the way, a far portal is aimed at in a straight line, not a 45° grid zig-zag.
+{
+    const aim = planStep(new Trails(null), 'TNL-125', [0, 0], [300, 90], ([dx, dy]) => [dx * 10, -dy * 10], 220)
+    const angle = Math.atan2(-aim.screen[1], aim.screen[0]) - Math.atan2(90, 300)
+    assert.ok(Math.abs(angle) < 0.01, `aimed ${(angle * 180 / Math.PI).toFixed(1)}° off the straight line`)
+    assert.ok(Math.abs(Math.hypot(...aim.screen) - 220) < 1e-6, 'aim stays within the step radius')
+}
+
 // A hidden wall at x=100 between y=200 and y=400. The walker starts in front of it and must
 // learn it by bumping into it, then route around to the portal on the other side.
 const hitsWall = (a, b) => {

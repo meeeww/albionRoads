@@ -72,22 +72,30 @@ const clearLine = (trails, zoneId, a, b) => {
     return true
 }
 
-// Picks where to click next: the portal itself when it's close and nothing known is in the way,
-// otherwise the farthest route point within `maxPx` of the character that it can walk to straight.
+// Picks where to aim next: the portal itself when it's close and nothing known is in the way,
+// otherwise straight at the farthest route point with a clear line, however far. Grid routes
+// zig-zag at 45°, so aiming at a nearby route point would veer off the road.
 const planStep = (trails, zoneId, pos, target, toScreen, maxPx) => {
     const offset = (point) => toScreen([point[0] - pos[0], point[1] - pos[1]])
-    const direct = offset(target)
-    if (Math.hypot(...direct) <= maxPx && clearLine(trails, zoneId, pos, target)) {
-        return { final: true, screen: direct, world: target }
+    const clampPx = (screen) => {
+        const length = Math.hypot(...screen)
+        return length > maxPx ? screen.map((v) => v * maxPx / length) : screen
     }
+    const direct = offset(target)
+    const targetInSight = clearLine(trails, zoneId, pos, target)
+    if (targetInSight && Math.hypot(...direct) <= maxPx) return { final: true, screen: direct, world: target }
+    if (targetInSight) return { final: false, screen: clampPx(direct), world: target }
+
     const route = findPath(trails, zoneId, pos, target)
     if (!route) return null
     let pick = route[Math.min(1, route.length - 1)]
-    for (const point of route) {
-        if (Math.hypot(...offset(point)) > maxPx) break
-        if (clearLine(trails, zoneId, pos, point)) pick = point
+    for (let i = route.length - 1; i > 0; i--) {
+        if (clearLine(trails, zoneId, pos, route[i])) {
+            pick = route[i]
+            break
+        }
     }
-    return { final: false, screen: offset(pick), world: pick }
+    return { final: false, screen: clampPx(offset(pick)), world: pick }
 }
 
 // Marks a short wall segment at the first not-yet-known cell ahead of `pos`, across the direction
