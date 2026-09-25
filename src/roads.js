@@ -11,6 +11,8 @@ const MOVE = 22
 const EXIT_RADIUS = 30
 // ponytail: fixed guess at how long a Roads portal stays open; the game has per-portal timers we don't read yet.
 const STALE_MS = 3 * 60 * 60 * 1000
+// ponytail: an empty portal spot is skipped for this long, then checked again; real spawn times are unknown.
+const CLOSED_MS = 60 * 60 * 1000
 
 const nameOf = (id) => zones[id]?.name || id
 const exitsOf = (id) => zones[id]?.exits || []
@@ -29,18 +31,29 @@ const nearestExit = (zoneId, pos) => {
     return best
 }
 
-const readLinks = () => {
-    const links = new Map()
-    if (!fs.existsSync(LINKS_PATH)) return links
+// roads.jsonl holds hops ({from, fromSlot, to, toSlot}) and empty portal spots ({zone, slot, closed}).
+const readLog = () => {
+    const log = { links: new Map(), closed: new Map() }
+    if (!fs.existsSync(LINKS_PATH)) return log
     for (const line of fs.readFileSync(LINKS_PATH, 'utf8').split('\n')) {
-        if (line.trim()) addLink(links, JSON.parse(line))
+        if (line.trim()) addEntry(log, JSON.parse(line))
     }
-    return links
+    return log
 }
 
-const addLink = (links, hop) => {
-    if (hop.fromSlot) links.set(`${hop.from}|${hop.fromSlot}`, { zone: hop.to, slot: hop.toSlot, t: hop.t })
-    if (hop.toSlot) links.set(`${hop.to}|${hop.toSlot}`, { zone: hop.from, slot: hop.fromSlot, t: hop.t })
+const addEntry = ({ links, closed }, entry) => {
+    if (entry.closed) {
+        closed.set(`${entry.zone}|${entry.slot}`, entry.t)
+        return
+    }
+    for (const [zone, slot, other, otherSlot] of [
+        [entry.from, entry.fromSlot, entry.to, entry.toSlot],
+        [entry.to, entry.toSlot, entry.from, entry.fromSlot],
+    ]) {
+        if (!slot) continue
+        links.set(`${zone}|${slot}`, { zone: other, slot: otherSlot, t: entry.t })
+        closed.delete(`${zone}|${slot}`)
+    }
 }
 
 const pair = (value) => Array.isArray(value) && value.length === 2 ? [Number(value[0]), Number(value[1])] : null
@@ -55,7 +68,9 @@ class RoadTracker extends EventEmitter {
         super()
         this.zone = null
         this.pos = null
-        this.links = readLinks()
+        const log = readLog()
+        this.log = log
+        this.links = log.links
         this.trails = trails
         setInterval(() => trails.save(), 15000).unref()
 
@@ -82,7 +97,7 @@ class RoadTracker extends EventEmitter {
             if (from && from !== to) {
                 const hop = { t: Date.now(), from, fromSlot: fromExit?.slot, to, toSlot: toExit?.slot }
                 fs.appendFileSync(LINKS_PATH, JSON.stringify(hop) + '\n')
-                addLink(this.links, hop)
+                addEntry(this.log, hop)
                 console.log(`\n${nameOf(from)} -> ${nameOf(to)}`)
             }
             this.printZone()
@@ -95,6 +110,17 @@ class RoadTracker extends EventEmitter {
         return link && Date.now() - link.t < STALE_MS ? link : null
     }
 
+    closedAt(zoneId, slot) {
+        const t = this.log.closed.get(`${zoneId}|${slot}`)
+        return t && Date.now() - t < CLOSED_MS ? t : null
+    }
+
+    markClosed(zoneId, slot) {
+        const entry = { t: Date.now(), zone: zoneId, slot, closed: true }
+        fs.appendFileSync(LINKS_PATH, JSON.stringify(entry) + '\n')
+        addEntry(this.log, entry)
+    }
+
     printZone() {
         const exits = exitsOf(this.zone)
         if (!exits.length) {
@@ -104,8 +130,10 @@ class RoadTracker extends EventEmitter {
         console.log(`${nameOf(this.zone)} (${this.zone}), ${exits.length} exits:`)
         exits.forEach((exit, index) => {
             const link = this.linkOf(this.zone, exit.slot)
+            const closed = this.closedAt(this.zone, exit.slot)
             const where = exit.kind === 'mistscityentrance' ? 'mists city entrance'
-                : link ? `${nameOf(link.zone)} (${age(link.t)})` : 'unknown'
+                : link ? `${nameOf(link.zone)} (${age(link.t)})`
+                : closed ? `no portal right now (checked ${age(closed)})` : 'unknown'
             console.log(`  ${index + 1}. (${exit.x}, ${exit.y}) -> ${where}`)
         })
     }

@@ -43,6 +43,14 @@ try {
     listener.emit('response', { parameters: { 253: 2, 8: 'TNL-125', 66: 'TNL-109', 9: [239.47, 305] } })
     assert.strictEqual(tracker.linkOf('TNL-109', 'instanceslot_03').zone, 'TNL-125')
     assert.strictEqual(tracker.linkOf('TNL-125', 'instanceslot_02').slot, 'instanceslot_03')
+
+    // An empty portal spot stays closed until someone actually goes through it.
+    tracker.markClosed('TNL-125', 'instanceslot_10')
+    assert.ok(tracker.closedAt('TNL-125', 'instanceslot_10'))
+    assert.ok(new RoadTracker(new EventEmitter(), new Trails(null)).closedAt('TNL-125', 'instanceslot_10'), 'closed spot persists')
+    listener.emit('request', { parameters: { 253: 22, 1: [45, -270], 3: [45, -275] } })
+    listener.emit('response', { parameters: { 253: 2, 8: 'TNL-126', 66: 'TNL-125', 9: [95, 240] } })
+    assert.strictEqual(tracker.closedAt('TNL-125', 'instanceslot_10'), null)
 } finally {
     if (saved) fs.writeFileSync(linksPath, saved)
     else fs.rmSync(linksPath, { force: true })

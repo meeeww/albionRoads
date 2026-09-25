@@ -15,7 +15,7 @@ const zoneInfo = (tracker, id) => {
         origin: zone.origin,
         size: zone.size,
         pieces: zone.pieces || [],
-        exits: exitsOf(id).map((exit) => ({ ...exit, link: tracker.linkOf(id, exit.slot) })),
+        exits: exitsOf(id).map((exit) => ({ ...exit, link: tracker.linkOf(id, exit.slot), closed: tracker.closedAt(id, exit.slot) })),
     }
 }
 
@@ -152,6 +152,7 @@ async function loadZone(id) {
   document.getElementById('exits').innerHTML = zoneData.exits.map((e, i) => {
     const where = e.kind === 'mistscityentrance' ? '<span class="muted">mists city entrance</span>'
       : e.link ? '<a data-zone="' + esc(e.link.zone) + '">' + esc(data.zones[e.link.zone]?.name || e.link.zone) + '</a> <span class="muted">' + ago(e.link.t) + '</span>'
+      : e.closed ? '<span style="color:#d36b6b">no portal right now</span> <span class="muted">checked ' + ago(e.closed) + '</span>'
       : '<span class="muted">unknown</span>'
     return '<li>' + (i + 1) + '. (' + e.x + ', ' + e.y + ') → ' + where + '</li>'
   }).join('')
@@ -283,10 +284,14 @@ function drawZone() {
   zctx.fillStyle = '#d36b6b'
   for (const key of z.blocked) { const [cx, cy] = key.split(',').map(Number); zctx.fillRect(cx * z.cell, cy * z.cell, z.cell, z.cell) }
   z.exits.forEach((e, i) => {
-    zctx.fillStyle = e.link ? '#e2c56a' : '#8f8874'
-    zctx.beginPath(); zctx.arc(e.x, e.y, 14, 0, Math.PI * 2); zctx.fill()
-    const name = e.kind === 'mistscityentrance' ? 'mists' : e.link ? (data.zones[e.link.zone]?.name || e.link.zone) : '?'
-    label((i + 1) + '. ' + name, e.x, e.y, e.link ? '#e2c56a' : '#b7b09d')
+    zctx.beginPath(); zctx.arc(e.x, e.y, 14, 0, Math.PI * 2)
+    if (e.closed && !e.link) {
+      zctx.strokeStyle = '#d36b6b'; zctx.lineWidth = 3 / scale; zctx.stroke()
+    } else {
+      zctx.fillStyle = e.link ? '#e2c56a' : '#8f8874'; zctx.fill()
+    }
+    const name = e.kind === 'mistscityentrance' ? 'mists' : e.link ? (data.zones[e.link.zone]?.name || e.link.zone) : e.closed ? 'closed' : '?'
+    label((i + 1) + '. ' + name, e.x, e.y, e.link ? '#e2c56a' : e.closed ? '#d36b6b' : '#b7b09d')
   })
   if (z.id === data.current && data.pos) {
     zctx.fillStyle = '#ffffff'

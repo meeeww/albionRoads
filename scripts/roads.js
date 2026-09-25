@@ -7,6 +7,10 @@ const EXPLORE = process.argv.includes('--explore')
 // Clicks stay this many pixels from the character so they land on the ground, not the UI.
 const STEP_PX = 220
 const PORTAL_TIMEOUT_MS = 4 * 60 * 1000
+// How often the held cursor is re-aimed along the route.
+const STEER_MS = 400
+// Within this many units of a portal spot the character counts as standing on it.
+const ARRIVED_UNITS = 8
 const CALIBRATION_PX = [[180, 0], [0, 180], [-180, -180], [-150, 120]]
 // Calibration keeps the first clicks plus this many recent walking clicks.
 const RECENT_SAMPLES = 20
@@ -60,14 +64,32 @@ const explore = async (tracker) => {
     const [cx, cy] = getTargetCoordinates(win).center
 
     let expectedMouse = null
-    const click = ([sx, sy]) => {
+    let holding = false
+    const aim = ([sx, sy]) => {
         const now = robot.getMousePos()
         if (expectedMouse && Math.hypot(now.x - expectedMouse[0], now.y - expectedMouse[1]) > 30) {
             throw new Error('Mouse moved by hand, stopping.')
         }
         expectedMouse = [Math.round(cx + sx), Math.round(cy + sy)]
         robot.moveMouse(...expectedMouse)
+    }
+    const release = () => {
+        if (!holding) return
+        robot.mouseToggle('up', 'left')
+        holding = false
+    }
+    process.on('exit', release)
+    const click = (screen) => {
+        release()
+        aim(screen)
         robot.mouseClick('left')
+    }
+    // Holding the button keeps the character walking toward the cursor, so steering is just moving it.
+    const hold = (screen) => {
+        aim(screen)
+        if (holding) return
+        robot.mouseToggle('down', 'left')
+        holding = true
     }
 
     let lastTarget = null
@@ -116,6 +138,14 @@ const explore = async (tracker) => {
     }
 
     const usePortal = async (exit) => {
+        try {
+            return await walkThrough(exit)
+        } finally {
+            release()
+        }
+    }
+
+    const walkThrough = async (exit) => {
         const target = [exit.x, exit.y]
         const started = Date.now()
         let last = tracker.pos
@@ -126,14 +156,17 @@ const explore = async (tracker) => {
             if (step.final) {
                 const zone = withTimeout(tracker, 'zone', 20000)
                 click(step.screen)
-                return await zone ? 'arrived' : 'closed'
+                if (await zone) return 'arrived'
+                // Standing on the spot with no zone change means no portal has spawned there.
+                const left = Math.hypot(target[0] - tracker.pos[0], target[1] - tracker.pos[1])
+                return left < ARRIVED_UNITS ? 'closed' : 'unreachable'
             }
-            const clickedAt = Date.now()
-            const answer = nextTarget(700)
-            click(step.screen)
+            const steeredAt = Date.now()
+            const answer = nextTarget(STEER_MS)
+            hold(step.screen)
             const move = await answer
             if (move) learn(step.screen, move)
-            await sleep(Math.max(0, 700 - (Date.now() - clickedAt)))
+            await sleep(Math.max(0, STEER_MS - (Date.now() - steeredAt)))
             const pos = tracker.pos
             if (Math.hypot(pos[0] - last[0], pos[1] - last[1]) < 0.8) {
                 if (++stuck >= 2) {
@@ -149,11 +182,12 @@ const explore = async (tracker) => {
     }
 
     const home = tracker.zone
-    const closed = new Set()
+    const skipped = new Set()
     for (;;) {
         if (tracker.zone !== home) throw new Error(`Ended up in ${nameOf(tracker.zone)} instead of ${nameOf(home)}.`)
         const next = exitsOf(home)
-            .filter((exit) => exit.kind === 'tunnelexit' && !closed.has(exit.slot) && !tracker.linkOf(home, exit.slot))
+            .filter((exit) => exit.kind === 'tunnelexit' && !skipped.has(exit.slot)
+                && !tracker.linkOf(home, exit.slot) && !tracker.closedAt(home, exit.slot))
             .sort((a, b) => Math.hypot(a.x - tracker.pos[0], a.y - tracker.pos[1]) - Math.hypot(b.x - tracker.pos[0], b.y - tracker.pos[1]))[0]
         if (!next) break
 
@@ -161,11 +195,14 @@ const explore = async (tracker) => {
         const away = Math.hypot(next.x - tracker.pos[0], next.y - tracker.pos[1])
         console.log(`\nWalking to unknown exit ${number} (${next.x}, ${next.y}), ${Math.round(away)} units away`)
         const result = await usePortal(next)
+        if (result === 'closed') {
+            console.log('No portal there right now, marked as closed for the next hour.')
+            tracker.markClosed(home, next.slot)
+            continue
+        }
         if (result !== 'arrived') {
-            console.log(result === 'closed'
-                ? 'Clicked the portal but the zone did not change, treating that exit as closed.'
-                : 'Could not find a way to that exit, skipping it.')
-            closed.add(next.slot)
+            console.log('Could not find a way to that exit, skipping it this run.')
+            skipped.add(next.slot)
             continue
         }
 
