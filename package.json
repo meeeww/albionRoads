@@ -1,0 +1,17 @@
+{
+  "scripts": {
+    "start": "node app.js",
+    "packets": "node ./scripts/read-packets.js",
+    "pixel-coor-test": "node ./scripts/pixel-coor-test.js"
+  },
+  "dependencies": {
+    "buffercursor": "^0.0.12",
+    "color-classifier": "^0.0.1",
+    "readline-sync": "^1.4.10",
+    "koffi": "^3.3.1",
+    "robotjs": "0.9.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30"
+  }
+}
