@@ -109,7 +109,8 @@ const main = async () => {
                 // S_ and M_ pieces are 80 and 280 units square; the ROAD_ base spans the whole zone.
                 const size = { S: 80, M: 280 }[ref[0]]
                 const kind = ref.match(/_(Portal|RES|PVE|DNG|Sleeve|EMPTY)/)?.[1]
-                if (size) pieces.push({ x: Number(x), y: Number(y), size, kind })
+                const name = ref.replace(/^[SM]_ROADS_/, '').replace(/_\d+$/, '')
+                if (size) pieces.push({ x: Number(x), y: Number(y), size, kind, name })
             }
             zones[id].pieces = pieces
             zones[id].exits = exitSlots[id]

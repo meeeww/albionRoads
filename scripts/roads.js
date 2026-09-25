@@ -1,6 +1,6 @@
 const { once } = require('events')
 const { RoadTracker, exitsOf, nameOf } = require('../src/roads')
-const { planStep, markWallAhead } = require('../src/road-paths')
+const { planStep, markWallAhead, CELL } = require('../src/road-paths')
 const { sleep } = require('../src/utils')
 
 const EXPLORE = process.argv.includes('--explore')
@@ -9,8 +9,10 @@ const STEP_PX = 220
 const PORTAL_TIMEOUT_MS = 4 * 60 * 1000
 // How often the held cursor is re-aimed along the route.
 const STEER_MS = 400
-// Within this many units of a portal spot the character counts as standing on it.
-const ARRIVED_UNITS = 8
+// Without a portal, trees and rocks close the road into a portal spot. Getting no closer for
+// this long while this near the spot means it's closed right now.
+const CLOSED_NEAR_UNITS = 120
+const NO_PROGRESS_MS = 20000
 const CALIBRATION_PX = [[180, 0], [0, 180], [-180, -180], [-150, 120]]
 // Least-squares fit of d = A * s + b over (screen offset -> world offset) samples.
 const solveAffine = (samples) => {
@@ -60,26 +62,31 @@ const explore = async (tracker) => {
     if (!win) throw new Error('Albion Online Client window not found')
     const [cx, cy] = getTargetCoordinates(win).center
 
-    let expectedMouse = null
+    // Bit 1 of GetAsyncKeyState means "pressed since the last call", so reading it right after each
+    // of our own presses leaves it set only by the user's clicks.
+    const GetAsyncKeyState = require('koffi').load('user32.dll').func('short __stdcall GetAsyncKeyState(int vKey)')
+    const forgetOwnPress = () => { GetAsyncKeyState(0x01); GetAsyncKeyState(0x02) }
     let holding = false
     const aim = ([sx, sy]) => {
-        const now = robot.getMousePos()
-        if (expectedMouse && Math.hypot(now.x - expectedMouse[0], now.y - expectedMouse[1]) > 30) {
-            throw new Error('Mouse moved by hand, stopping.')
+        const left = GetAsyncKeyState(0x01)
+        // A user's click while we hold also releases the button we're holding.
+        if ((left & 1) || (GetAsyncKeyState(0x02) & 1) || (holding && !(left & 0x8000))) {
+            throw new Error('Mouse clicked by hand, stopping.')
         }
-        expectedMouse = [Math.round(cx + sx), Math.round(cy + sy)]
-        robot.moveMouse(...expectedMouse)
+        robot.moveMouse(Math.round(cx + sx), Math.round(cy + sy))
     }
     const release = () => {
         if (!holding) return
         robot.mouseToggle('up', 'left')
         holding = false
+        forgetOwnPress()
     }
     process.on('exit', release)
     const click = (screen) => {
         release()
         aim(screen)
         robot.mouseClick('left')
+        forgetOwnPress()
     }
     // Holding the button keeps the character walking toward the cursor, so steering is just moving it.
     const hold = (screen) => {
@@ -87,6 +94,7 @@ const explore = async (tracker) => {
         if (holding) return
         robot.mouseToggle('down', 'left')
         holding = true
+        forgetOwnPress()
     }
 
     let lastTarget = null
@@ -111,6 +119,7 @@ const explore = async (tracker) => {
 
     win.setForeground()
     await sleep(500)
+    forgetOwnPress()
 
     console.log('Calibrating: the character will take four short steps.')
     const firstSamples = []
@@ -139,7 +148,16 @@ const explore = async (tracker) => {
         const started = Date.now()
         let last = tracker.pos
         let stuck = 0
+        const distance = () => Math.hypot(target[0] - tracker.pos[0], target[1] - tracker.pos[1])
+        let closest = distance()
+        let closerAt = Date.now()
         while (Date.now() - started < PORTAL_TIMEOUT_MS) {
+            if (distance() < closest - 3) {
+                closest = distance()
+                closerAt = Date.now()
+            } else if (closest < CLOSED_NEAR_UNITS && Date.now() - closerAt > NO_PROGRESS_MS) {
+                return 'closed'
+            }
             const step = planStep(tracker.trails, tracker.zone, tracker.pos, target, view.toScreen, STEP_PX)
             if (!step) return 'unreachable'
             if (step.final) {
@@ -150,9 +168,8 @@ const explore = async (tracker) => {
                     if (await Promise.race([zone, sleep(2000)])) return 'arrived'
                 }
                 if (await zone) return 'arrived'
-                // Standing on the spot with no zone change means no portal has spawned there.
-                const left = Math.hypot(target[0] - tracker.pos[0], target[1] - tracker.pos[1])
-                return left < ARRIVED_UNITS ? 'closed' : 'unreachable'
+                // Standing at the spot with no zone change means no portal has spawned there.
+                return distance() < CLOSED_NEAR_UNITS ? 'closed' : 'unreachable'
             }
             hold(step.screen)
             await sleep(STEER_MS)
@@ -212,6 +229,13 @@ const explore = async (tracker) => {
         if (result === 'closed') {
             console.log('No portal there right now, marked as closed for the next hour.')
             tracker.markClosed(home, next.slot)
+            // The walls learned there are the closed road; they're gone once a portal opens.
+            const { blocked } = tracker.trails.of(home)
+            for (const key of blocked) {
+                const [x, y] = key.split(',').map((v) => (Number(v) + 0.5) * CELL)
+                if (Math.hypot(x - next.x, y - next.y) < CLOSED_NEAR_UNITS) blocked.delete(key)
+            }
+            tracker.trails.dirty = true
             continue
         }
         if (result !== 'arrived') {

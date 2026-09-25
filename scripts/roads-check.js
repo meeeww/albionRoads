@@ -118,20 +118,41 @@ assert.ok(trails.of(zone).blocked.size > 0, 'the wall was learned')
 assert.ok(findPath(trails, zone, [60, 300], target).every(([x, y]) => !(x > 98 && x < 102 && y > 200 && y < 400)))
 
 // Routes between real portals follow the road pieces instead of cutting across to the portal.
-{
-    const cells = groundOf('TNL-109')
-    const exits = zones['TNL-109'].exits
+// They also keep off the road edges, where the railings and rocks stand.
+for (const zoneId of ['TNL-109', 'TNL-220']) {
+    const { core } = groundOf(zoneId)
+    const exits = zones[zoneId].exits
     for (const [a, b] of [[exits[0], exits[exits.length - 1]], [exits[1], exits[2]]]) {
         const from = [a.x, a.y]
         const to = [b.x, b.y]
-        const path = findPath(new Trails(null), 'TNL-109', from, to)
-        assert.ok(path, `route ${a.slot} -> ${b.slot}`)
-        const offRoad = path.filter((p) => !cells.has(p.map((v) => Math.floor(v / CELL)).join()) &&
+        const path = findPath(new Trails(null), zoneId, from, to)
+        assert.ok(path, `route ${zoneId} ${a.slot} -> ${b.slot}`)
+        const nearEdge = path.filter((p) => !core.has(p.map((v) => Math.floor(v / CELL)).join()) &&
             Math.hypot(p[0] - from[0], p[1] - from[1]) > 40 && Math.hypot(p[0] - to[0], p[1] - to[1]) > 40)
-        assert.ok(offRoad.length <= path.length * 0.05, `${offRoad.length}/${path.length} route cells off the road ${a.slot} -> ${b.slot}`)
-        const aim = planStep(new Trails(null), 'TNL-109', from, to, ([dx, dy]) => [dx * 10, -dy * 10], 220)
-        assert.ok(clearLine(new Trails(null), 'TNL-109', from, aim.world), 'first aim stays on the road')
+        assert.ok(nearEdge.length <= path.length * 0.05, `${nearEdge.length}/${path.length} route cells at the road edge ${zoneId} ${a.slot} -> ${b.slot}`)
+        const aim = planStep(new Trails(null), zoneId, from, to, ([dx, dy]) => [dx * 10, -dy * 10], 220)
+        assert.ok(clearLine(new Trails(null), zoneId, from, aim.world), 'first aim stays on the road')
     }
+    // A waypoint on the road gets no free zone: a corner cut that leaves the road only near the
+    // waypoint (what the old 40-unit allowance let through) must not count as a clear line.
+    if (zoneId !== 'TNL-109') continue
+    const onCore = (p) => core.has(p.map((v) => Math.floor(v / CELL)).join())
+    const route = findPath(new Trails(null), zoneId, [exits[1].x, exits[1].y], [exits[2].x, exits[2].y]).filter(onCore)
+    let cut = null
+    for (let i = 0; i < route.length && !cut; i += 5) {
+        for (let j = i + 10; j < route.length && !cut; j += 5) {
+            const [a, b] = [route[i], route[j]]
+            const length = Math.hypot(b[0] - a[0], b[1] - a[1])
+            const off = []
+            for (let s = 1; s < length / 2; s++) {
+                const p = [a[0] + (b[0] - a[0]) * s * 2 / length, a[1] + (b[1] - a[1]) * s * 2 / length]
+                if (!onCore(p)) off.push(length - s * 2)
+            }
+            if (off.length && off.every((d) => d < 40 && d > CELL * 2)) cut = [a, b]
+        }
+    }
+    assert.ok(cut, `found a corner cut in ${zoneId}`)
+    assert.ok(!clearLine(new Trails(null), zoneId, ...cut), `corner cut near an on-road waypoint is rejected in ${zoneId}`)
 }
 
 console.log('roads check ok')

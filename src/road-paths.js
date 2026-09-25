@@ -13,31 +13,48 @@ const UNKNOWN_COST = 1.25
 const ROAD_COST = 1
 const OFFROAD_COST = 1.5
 const OFF_GROUND_COST = 6
-// Portal pieces have no road piece under them, so lines may leave the road this close to either end.
+// Railings, columns and rocks line the road edges: routes pay extra this close to an edge,
+// and straight lines must stay clear of it.
+const EDGE_CELLS = 2
+const EDGE_COST = 2
+// Portal pieces have no road piece under them, so a line may leave the road this close to an
+// end that is itself off the road.
 const OFF_GROUND_FREE = 40
 
 const cellOf = (pos) => [Math.floor(pos[0] / CELL), Math.floor(pos[1] / CELL)]
 const keyOf = (cx, cy) => `${cx},${cy}`
 const centerOf = (cx, cy) => [(cx + 0.5) * CELL, (cy + 0.5) * CELL]
 
-// Cell key -> cost for every cell under a road piece of the zone, or null when the zone has none.
+// { cost: cell key -> cost under every road piece, core: cells at least EDGE_CELLS inside the road },
+// or null when the zone has no road pieces.
 const groundCache = new Map()
 const groundOf = (zoneId) => {
     if (!groundCache.has(zoneId)) {
         const rects = ground[zones[zoneId]?.layout]
-        let cells = null
+        let out = null
         if (rects?.length) {
-            cells = new Map()
+            const cost = new Map()
             for (const [x, y, w, d, offroad] of rects) {
                 for (let cx = Math.floor((x - w / 2) / CELL); cx < Math.ceil((x + w / 2) / CELL); cx++) {
                     for (let cy = Math.floor((y - d / 2) / CELL); cy < Math.ceil((y + d / 2) / CELL); cy++) {
                         const key = keyOf(cx, cy)
-                        if (!offroad || !cells.has(key)) cells.set(key, offroad ? OFFROAD_COST : ROAD_COST)
+                        if (!offroad || !cost.has(key)) cost.set(key, offroad ? OFFROAD_COST : ROAD_COST)
                     }
                 }
             }
+            const core = new Set()
+            for (const key of cost.keys()) {
+                const [cx, cy] = key.split(',').map(Number)
+                let inside = true
+                for (let dx = -EDGE_CELLS; dx <= EDGE_CELLS && inside; dx++) {
+                    for (let dy = -EDGE_CELLS; dy <= EDGE_CELLS && inside; dy++) inside = cost.has(keyOf(cx + dx, cy + dy))
+                }
+                if (inside) core.add(key)
+            }
+            for (const key of cost.keys()) if (!core.has(key)) cost.set(key, cost.get(key) + EDGE_COST)
+            out = { cost, core }
         }
-        groundCache.set(zoneId, cells)
+        groundCache.set(zoneId, out)
     }
     return groundCache.get(zoneId)
 }
@@ -89,12 +106,13 @@ class Trails {
     }
 }
 
-// Line of sight over the grid: true when no blocked cell sits between a and b, and the line stays
-// on road pieces or walked ground away from its ends. The last cell and a half before b is
-// skipped: a portal's own collider gets marked blocked.
+// Line of sight over the grid: true when no blocked cell sits between a and b, and the line keeps
+// clear of the road edges, except near an end that is itself off the road (a portal). The last
+// cell and a half before b is skipped: a portal's own collider gets marked blocked.
 const clearLine = (trails, zoneId, a, b) => {
-    const cells = groundOf(zoneId)
-    const { walked } = trails.of(zoneId)
+    const core = groundOf(zoneId)?.core
+    const freeA = core && !core.has(keyOf(...cellOf(a))) ? OFF_GROUND_FREE : 0
+    const freeB = core && !core.has(keyOf(...cellOf(b))) ? OFF_GROUND_FREE : 0
     const length = Math.hypot(b[0] - a[0], b[1] - a[1])
     const steps = Math.ceil(length / (CELL / 2))
     for (let i = 1; i <= steps; i++) {
@@ -102,9 +120,8 @@ const clearLine = (trails, zoneId, a, b) => {
         if (length * (1 - t) < CELL * 1.5) break
         const point = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
         if (trails.isBlocked(zoneId, point)) return false
-        const key = keyOf(...cellOf(point))
-        const nearEnd = length * Math.min(t, 1 - t) < OFF_GROUND_FREE
-        if (cells && !nearEnd && !cells.has(key) && !walked.has(key)) return false
+        const nearFreeEnd = length * t < freeA || length * (1 - t) < freeB
+        if (core && !nearFreeEnd && !core.has(keyOf(...cellOf(point)))) return false
     }
     return true
 }
@@ -164,8 +181,9 @@ const markWallAhead = (trails, zoneId, pos, toward) => {
 // A* from `from` to within `reach` units of `to`. Returns world waypoints, or null when walled off.
 const findPath = (trails, zoneId, from, to, reach = CELL * 2) => {
     const { walked, blocked } = trails.of(zoneId)
-    const cells = groundOf(zoneId)
-    const costOf = (key) => walked.has(key) ? WALKED_COST : cells ? cells.get(key) ?? OFF_GROUND_COST : UNKNOWN_COST
+    // Where the road pieces are known they beat the walked trail, which also records every wall scrape.
+    const groundCost = groundOf(zoneId)?.cost
+    const costOf = (key) => groundCost ? groundCost.get(key) ?? OFF_GROUND_COST : walked.has(key) ? WALKED_COST : UNKNOWN_COST
     const bounds = zones[zoneId]?.origin && zones[zoneId]?.size
         ? [zones[zoneId].origin, zones[zoneId].size]
         : null
