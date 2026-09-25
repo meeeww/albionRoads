@@ -5,6 +5,7 @@
     "roads": "node ./scripts/roads.js",
     "roads:build": "node ./scripts/build-roads.js",
     "roads:check": "node ./scripts/roads-check.js",
+    "find-timers": "node ./scripts/find-timers.js",
     "pixel-coor-test": "node ./scripts/pixel-coor-test.js"
   },
   "dependencies": {
