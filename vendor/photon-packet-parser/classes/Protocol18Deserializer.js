@@ -407,9 +407,27 @@ function deserializeEventData(reader) {
     }
 }
 
+function deserializeOperationResponse(reader) {
+    const operationCode = reader.readUInt8()
+    const returnCode = reader.readInt16LE()
+    let debugMessage = ''
+    if (reader.remaining() > 0) {
+        const debugType = reader.readUInt8()
+        const debugValue = deserialize(reader, debugType)
+        if (typeof debugValue === 'string') debugMessage = debugValue
+    }
+    return {
+        operationCode,
+        returnCode,
+        debugMessage,
+        parameters: readParameterTable(reader),
+    }
+}
+
 module.exports = {
     Reader,
     ShortRead,
     deserializeOperationRequest,
+    deserializeOperationResponse,
     deserializeEventData,
 }

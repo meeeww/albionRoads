@@ -97,14 +97,13 @@ function plain(value, depth = 0) {
 function codeOf(kind, message) {
     const parameters = message?.parameters || {}
     if (kind === 'event') return parameters[252]
-    if (kind === 'request') return parameters[253]
-    return undefined
+    return parameters[253]
 }
 
 function shouldKeep(kind, code) {
     if (kind === 'bot') return true
     if (code === 36 || code === 37) return true
-    if (kind === 'request') return true
+    if (kind === 'request' || kind === 'response') return true
     if (FISHING_CODES.has(Number(code))) return true
     if (typeof code === 'number' && code >= 340 && code <= 380) return true
     return showAll
@@ -337,6 +336,7 @@ function recordMessage(kind, message) {
         code: code ?? null,
         name: names[code] || '',
         photonCode: kind === 'event' ? message.code : message.operationCode,
+        returnCode: message.returnCode,
         player: plain(parameters[0]),
         p1: plain(parameters[1]),
         p2: plain(parameters[2]),

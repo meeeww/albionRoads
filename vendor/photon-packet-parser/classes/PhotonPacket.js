@@ -3,6 +3,7 @@ const {
     ShortRead,
     deserializeEventData,
     deserializeOperationRequest,
+    deserializeOperationResponse,
 } = require('./Protocol18Deserializer')
 
 const HEADER_LENGTH = 12
@@ -82,6 +83,13 @@ class PhotonPacket {
             const message = deserializeOperationRequest(payload)
             message.raw = raw
             this.parent.emit('request', message)
+            return
+        }
+
+        if (messageType === 3 || messageType === 7) {
+            const message = deserializeOperationResponse(payload)
+            message.raw = raw
+            this.parent.emit('response', message)
             return
         }
 
