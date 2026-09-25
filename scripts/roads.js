@@ -173,6 +173,28 @@ const explore = async (tracker) => {
         return 'unreachable'
     }
 
+    // Outside the roads there's no layout data, but the portal stands right next to the arrival spot.
+    // ponytail: clicks a ring around the arrival spot; learning the portal position from its spawn packet would be exact.
+    const goBackBlind = async () => {
+        const spawn = tracker.pos
+        const zone = withTimeout(tracker, 'zone', 90000)
+        try {
+            for (let round = 0; round < 2; round++) {
+                for (const radius of [6, 12]) {
+                    for (let i = 0; i < 8; i++) {
+                        const angle = i * Math.PI / 4
+                        const spot = [spawn[0] + radius * Math.cos(angle), spawn[1] + radius * Math.sin(angle)]
+                        click(view.toScreen([spot[0] - tracker.pos[0], spot[1] - tracker.pos[1]]))
+                        if (await Promise.race([zone, sleep(2500)])) return true
+                    }
+                }
+            }
+            return false
+        } finally {
+            release()
+        }
+    }
+
     const home = tracker.zone
     const skipped = new Set()
     for (;;) {
@@ -200,9 +222,9 @@ const explore = async (tracker) => {
 
         await sleep(3000)
         const back = exitsOf(tracker.zone).find((exit) => exit.slot === tracker.linkOf(home, next.slot)?.slot)
-        if (!back) throw new Error(`Arrived in ${nameOf(tracker.zone)} but not next to a known exit, stopping.`)
         console.log(`Going back to ${nameOf(home)}`)
-        if (await usePortal(back) !== 'arrived') throw new Error('Could not go back through the portal.')
+        const wentBack = back ? await usePortal(back) === 'arrived' : await goBackBlind()
+        if (!wentBack) throw new Error('Could not go back through the portal.')
         await sleep(3000)
     }
 
