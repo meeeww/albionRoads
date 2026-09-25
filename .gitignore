@@ -2,3 +2,5 @@ node_modules
 packets.jsonl
 roads.jsonl
 trails.json
+last-tooltip.bmp
+eng.traineddata

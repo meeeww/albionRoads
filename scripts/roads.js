@@ -1,5 +1,5 @@
 const { once } = require('events')
-const { RoadTracker, exitsOf, nameOf } = require('../src/roads')
+const { RoadTracker, exitsOf, nameOf, nearestExit } = require('../src/roads')
 const { planStep, markWallAhead, CELL } = require('../src/road-paths')
 const { sleep } = require('../src/utils')
 
@@ -141,10 +141,39 @@ const explore = async (tracker) => {
     const usePortal = async (exit, open = false) => {
         try {
             const result = await walkThrough(exit, open)
-            if (result === 'arrived') arrivedAt = Date.now()
+            if (result === 'arrived') {
+                arrivedAt = Date.now()
+                release()
+                await readPortalTimer()
+            }
             return result
         } finally {
             release()
+        }
+    }
+
+    // After coming through, the character stands next to the portal it used: hover it and read the
+    // time left from its tooltip, unless that link already has one.
+    const { readTimer } = require('../src/portal-timer')
+    const readPortalTimer = async () => {
+        const exit = nearestExit(tracker.zone, tracker.pos)
+        const link = exit && tracker.linkOf(tracker.zone, exit.slot)
+        if (!link || link.expires) return
+        // The loading screen is still up right after the zone change.
+        await sleep(2500)
+        const screen = view.toScreen([exit.x - tracker.pos[0], exit.y - tracker.pos[1]])
+        aim(screen)
+        await sleep(1200)
+        try {
+            const { text, left } = await readTimer(robot, [cx + screen[0], cy + screen[1]])
+            if (!left) {
+                console.log(`Could not read the portal timer (OCR read: "${text.replace(/\s+/g, ' ').trim()}"). The capture is in last-tooltip.bmp.`)
+                return
+            }
+            tracker.setTimer(tracker.zone, exit.slot, Date.now() + left)
+            console.log(`Portal to ${nameOf(link.zone)} closes in ${Math.floor(left / 3600000)}h ${String(Math.floor(left / 60000) % 60).padStart(2, '0')}m.`)
+        } catch (error) {
+            console.log(`Reading the portal timer failed: ${error.message}`)
         }
     }
 

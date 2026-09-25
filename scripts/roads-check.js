@@ -207,4 +207,13 @@ for (const zoneId of ['TNL-109', 'TNL-220']) {
     assert.deepStrictEqual(seen, ['undecoded', 7])
 }
 
+// The portal tooltip's time wins over the shorter "free to use" one, and OCR noise around it is ignored.
+{
+    const { parseTimer } = require('../src/portal-timer')
+    assert.strictEqual(parseTimer('Soritos-Apenlum\nCloses in 10h 05m\nFree to use for 1m'), (10 * 60 + 5) * 60000)
+    assert.strictEqual(parseTimer('| 2h18m ~'), 138 * 60000)
+    assert.strictEqual(parseTimer('closes in 45m 10s'), (45 * 60 + 10) * 1000)
+    assert.strictEqual(parseTimer('Free to use for 1m'), null)
+}
+
 console.log('roads check ok')
