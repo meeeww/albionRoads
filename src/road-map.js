@@ -26,13 +26,13 @@ const state = (tracker) => {
         if (Date.now() - link.t > STALE_MS) continue
         const zone = key.split('|')[0]
         const id = [zone, link.zone].sort().join('~')
-        if (!edges.has(id) || edges.get(id).t < link.t) edges.set(id, { a: zone, b: link.zone, t: link.t })
+        if (!edges.has(id) || edges.get(id).t < link.t) edges.set(id, { a: zone, b: link.zone, t: link.t, expires: link.t + STALE_MS })
     }
     const ids = new Set([...edges.values()].flatMap(({ a, b }) => [a, b]))
     if (tracker.zone) ids.add(tracker.zone)
     const out = {}
     for (const id of ids) out[id] = zoneInfo(tracker, id)
-    return { current: tracker.zone, pos: tracker.pos, zones: out, edges: [...edges.values()] }
+    return { now: Date.now(), current: tracker.zone, pos: tracker.pos, zones: out, edges: [...edges.values()] }
 }
 
 const startRoadMap = (tracker) => {
@@ -97,7 +97,8 @@ const PAGE = `<!doctype html>
 <main>
   <section>
     <div class="row"><h2>Network</h2><span class="muted" id="summary"></span></div>
-    <canvas id="net" width="900" height="900"></canvas>
+    <canvas id="net" width="900" height="900" style="touch-action:none"></canvas>
+    <p class="muted" style="margin:6px 0 0">Drag to move, scroll to zoom, double-click to reset. Times on the links count down to when they drop off.</p>
     <p class="legend" style="margin-top:8px">
       <span><i class="dot" style="background:#7dcea0"></i>T4</span>
       <span><i class="dot" style="background:#7eb6ff"></i>T5</span>
@@ -119,16 +120,30 @@ const PAGE = `<!doctype html>
 const TIER = { 4: '#7dcea0', 5: '#7eb6ff', 6: '#b48ef0', 7: '#e39b54', 8: '#d36b6b' }
 const PIECE = { Portal: '#6a5a2c', RES: '#2f4a2a', PVE: '#4a2a2a', DNG: '#3b2d4d' }
 // What spawns at a piece, from its layout name: RES_OreRock, PVE_SOLO (a boss that drops a chest), DNG_GROUP_Entrance.
-const SIZE = { SOLO: 'solo', GROUP: 'group', RAID: 'raid' }
-const spotOf = (p) => {
+// Icons come from the QRadar project; solo/group/raid use its green/blue/gold variants.
+const ICONS = 'https://raw.githubusercontent.com/FashionFlora/Albion-Online-Radar-QRadar/main/images/Resources/'
+const RESOURCE_ICON = { Ore: 'ore', Rock: 'rock', Wood: 'Logs', Fiber: 'fiber', Hide: 'hide' }
+const CHEST_ICON = { SOLO: 'green', GROUP: 'blue', RAID: 'legendary' }
+const DUNGEON_ICON = { SOLO: 'dungeon_1', GROUP: 'dungeon_2', RAID: 'dungeon_4' }
+const spotOf = (p, tier) => {
   const res = p.name?.match(/^RES_([A-Z][a-z]+)([A-Z][a-z]+)$/)
-  if (res) return { group: 'Resources', text: res[1] + ' + ' + res[2], color: '#7dcea0' }
+  if (res) return { group: 'Resources', text: res[1] + ' + ' + res[2], icons: [res[1], res[2]].map((kind) => RESOURCE_ICON[kind] + '_' + (tier || 4) + '_0') }
   const pve = p.name?.match(/^PVE_(SOLO|GROUP|RAID)$/)
-  if (pve) return { group: 'Chests', text: SIZE[pve[1]] + ' chest', color: '#e39b54' }
+  if (pve) return { group: 'Chests', text: pve[1].toLowerCase() + ' chest', icons: [CHEST_ICON[pve[1]]] }
   const dng = p.name?.match(/^DNG_(SOLO|GROUP|RAID)_Entrance$/)
-  if (dng) return { group: 'Dungeons', text: SIZE[dng[1]] + ' dungeon', color: '#b48ef0' }
+  if (dng) return { group: 'Dungeons', text: dng[1].toLowerCase() + ' dungeon', icons: [DUNGEON_ICON[dng[1]]] }
   return null
 }
+const images = {}
+const iconImage = (name) => {
+  if (!images[name]) {
+    images[name] = new Image()
+    images[name].onload = () => drawZone()
+    images[name].src = ICONS + name + '.png'
+  }
+  return images[name]
+}
+const iconsHtml = (spot) => spot.icons.map((name) => '<img src="' + ICONS + name + '.png" alt="' + esc(spot.text) + '" title="' + esc(spot.text) + '" width="28" height="28" style="vertical-align:middle">').join('')
 const net = document.getElementById('net')
 const nctx = net.getContext('2d')
 const zoneCanvas = document.getElementById('zone')
@@ -140,12 +155,23 @@ let rotation = 45
 let zoneData = null
 const nodes = {}
 let view = { scale: 1, x: 0, y: 0 }
+// User pan (canvas pixels) and zoom on top of the automatic fit.
+let pan = [0, 0]
+let zoom = 1
+// Server clock minus this device's clock, so countdowns are right on a phone with a different time.
+let clockSkew = 0
+const nodePx = (n) => [net.width / 2 + (n.x - view.x) * view.scale + pan[0], net.height / 2 + (n.y - view.y) * view.scale + pan[1]]
+const countdown = (ms) => {
+  const s = Math.max(0, Math.floor(ms / 1000))
+  return Math.floor(s / 3600) + ':' + String(Math.floor(s / 60) % 60).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0')
+}
 
 const ago = (t) => { const m = Math.round((Date.now() - t) / 60000); return m < 60 ? m + 'm ago' : (m / 60).toFixed(1) + 'h ago' }
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
 
 async function refresh() {
   data = await fetch('/api/state').then((r) => r.json())
+  clockSkew = data.now - Date.now()
   for (const id of Object.keys(data.zones)) {
     if (nodes[id]) continue
     const edge = data.edges.find((e) => e.a === id || e.b === id)
@@ -163,12 +189,13 @@ async function loadZone(id) {
   const known = zoneData.exits.filter((e) => e.link).length
   document.getElementById('zoneTitle').textContent = zoneData.name + (zoneData.exits.length ? ' (' + known + '/' + zoneData.exits.length + ' exits known)' : '')
   const groups = {}
-  for (const spot of zoneData.pieces.map(spotOf).filter(Boolean)) {
+  for (const spot of zoneData.pieces.map((p) => spotOf(p, zoneData.tier)).filter(Boolean)) {
     const counts = groups[spot.group] ||= {}
-    counts[spot.text] = (counts[spot.text] || 0) + 1
+    counts[spot.text] ||= { spot, n: 0 }
+    counts[spot.text].n++
   }
-  document.getElementById('spots').innerHTML = Object.entries(groups).map(([group, counts]) =>
-    '<b>' + group + ':</b> ' + Object.entries(counts).map(([text, n]) => (n > 1 ? n + '× ' : '') + esc(text)).join(', ')).join(' · ')
+  document.getElementById('spots').innerHTML = Object.values(groups).map((counts) =>
+    Object.values(counts).map(({ spot, n }) => '<span style="margin-right:10px">' + iconsHtml(spot) + (n > 1 ? ' ×' + n : '') + '</span>').join('')).join('')
   document.getElementById('exits').innerHTML = zoneData.exits.map((e, i) => {
     const where = e.kind === 'mistscityentrance' ? '<span class="muted">mists city entrance</span>'
       : e.link ? '<a data-zone="' + esc(e.link.zone) + '">' + esc(data.zones[e.link.zone]?.name || e.link.zone) + '</a> <span class="muted">' + ago(e.link.t) + '</span>'
@@ -229,19 +256,28 @@ function drawNet() {
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
   for (const id of ids) { const n = nodes[id]; minX = Math.min(minX, n.x); maxX = Math.max(maxX, n.x); minY = Math.min(minY, n.y); maxY = Math.max(maxY, n.y) }
   const span = Math.max(maxX - minX, maxY - minY, 200)
-  view = { scale: (net.width - 160) / span, x: (minX + maxX) / 2, y: (minY + maxY) / 2 }
-  const px = (n) => [net.width / 2 + (n.x - view.x) * view.scale, net.height / 2 + (n.y - view.y) * view.scale]
+  view = { scale: (net.width - 160) / span * zoom, x: (minX + maxX) / 2, y: (minY + maxY) / 2 }
+  const px = nodePx
 
   nctx.lineWidth = 3
+  nctx.font = '18px sans-serif'
+  nctx.textAlign = 'center'
+  const now = Date.now() + clockSkew
   for (const e of data.edges) {
     const a = nodes[e.a], b = nodes[e.b]
     if (!a || !b) continue
-    const age = (Date.now() - e.t) / (3 * 3600 * 1000)
-    nctx.strokeStyle = 'rgba(226, 197, 106, ' + Math.max(0.25, 1 - age) + ')'
-    nctx.beginPath(); nctx.moveTo(...px(a)); nctx.lineTo(...px(b)); nctx.stroke()
+    const left = e.expires - now
+    nctx.strokeStyle = 'rgba(226, 197, 106, ' + Math.max(0.25, left / (e.expires - e.t)) + ')'
+    const [ax, ay] = px(a), [bx, by] = px(b)
+    nctx.beginPath(); nctx.moveTo(ax, ay); nctx.lineTo(bx, by); nctx.stroke()
+    const [mx, my] = [(ax + bx) / 2, (ay + by) / 2]
+    const text = countdown(left)
+    nctx.fillStyle = 'rgba(18, 20, 15, 0.8)'
+    nctx.fillRect(mx - nctx.measureText(text).width / 2 - 4, my - 13, nctx.measureText(text).width + 8, 20)
+    nctx.fillStyle = left < 15 * 60000 ? '#d36b6b' : '#e2c56a'
+    nctx.fillText(text, mx, my + 3)
   }
   nctx.font = '22px sans-serif'
-  nctx.textAlign = 'center'
   for (const id of ids) {
     const z = data.zones[id]
     const [x, y] = px(nodes[id])
@@ -259,17 +295,43 @@ function drawNet() {
   requestAnimationFrame(drawNet)
 }
 
-net.onclick = (event) => {
+const canvasPoint = (event) => {
   const rect = net.getBoundingClientRect()
-  const x = (event.clientX - rect.left) * net.width / rect.width
-  const y = (event.clientY - rect.top) * net.height / rect.height
+  return [(event.clientX - rect.left) * net.width / rect.width, (event.clientY - rect.top) * net.height / rect.height]
+}
+// Drag to move, wheel to zoom around the cursor, double-click to reset.
+let drag = null
+net.onpointerdown = (event) => { drag = { at: canvasPoint(event), moved: false }; net.setPointerCapture(event.pointerId) }
+net.onpointermove = (event) => {
+  if (!drag) return
+  const at = canvasPoint(event)
+  if (Math.hypot(at[0] - drag.at[0], at[1] - drag.at[1]) > 4) drag.moved = true
+  if (!drag.moved) return
+  pan = [pan[0] + at[0] - drag.at[0], pan[1] + at[1] - drag.at[1]]
+  drag.at = at
+}
+net.onpointerup = (event) => {
+  const wasDrag = drag?.moved
+  drag = null
+  if (wasDrag) return
+  const [x, y] = canvasPoint(event)
   let best = null, bestD = 40
   for (const [id, n] of Object.entries(nodes)) {
-    const d = Math.hypot(net.width / 2 + (n.x - view.x) * view.scale - x, net.height / 2 + (n.y - view.y) * view.scale - y)
+    const [nx, ny] = nodePx(n)
+    const d = Math.hypot(nx - x, ny - y)
     if (d < bestD) { best = id; bestD = d }
   }
   if (best) { selected = best; loadZone(best) }
 }
+net.onwheel = (event) => {
+  event.preventDefault()
+  const factor = Math.exp(-event.deltaY * 0.0015)
+  const [x, y] = canvasPoint(event)
+  const m = [x - net.width / 2, y - net.height / 2]
+  zoom *= factor
+  pan = [m[0] - (m[0] - pan[0]) * factor, m[1] - (m[1] - pan[1]) * factor]
+}
+net.ondblclick = () => { pan = [0, 0]; zoom = 1 }
 
 function drawZone() {
   const z = zoneData
@@ -302,7 +364,17 @@ function drawZone() {
     zctx.fillStyle = offroad ? '#343a2a' : '#5a5440'
     zctx.fillRect(x - w / 2, y - d / 2, w, d)
   }
-  for (const p of z.pieces) { const spot = spotOf(p); if (spot) label(spot.text, p.x, p.y, spot.color) }
+  const ICON_PX = 34
+  for (const p of z.pieces) {
+    const spot = spotOf(p, z.tier)
+    if (!spot) continue
+    zctx.save(); zctx.translate(p.x, p.y); zctx.scale(1 / scale, -1 / scale); zctx.rotate(-rotation * Math.PI / 180)
+    spot.icons.forEach((name, i) => {
+      const image = iconImage(name)
+      if (image.complete && image.naturalWidth) zctx.drawImage(image, (i - spot.icons.length / 2) * ICON_PX, -ICON_PX / 2, ICON_PX, ICON_PX)
+    })
+    zctx.restore()
+  }
   zctx.fillStyle = 'rgba(231, 225, 209, 0.55)'
   for (const key of z.walked) { const [cx, cy] = key.split(',').map(Number); zctx.fillRect(cx * z.cell, cy * z.cell, z.cell, z.cell) }
   zctx.fillStyle = '#d36b6b'

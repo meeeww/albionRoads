@@ -57,6 +57,19 @@ try {
     listener.emit('request', { parameters: { 253: 22, 1: [45, -270], 3: [45, -275] } })
     listener.emit('response', { parameters: { 253: 2, 8: 'TNL-126', 66: 'TNL-125', 9: [95, 240] } })
     assert.strictEqual(tracker.closedAt('TNL-125', 'instanceslot_10'), null)
+
+    // With every exit of a road settled, the bot heads for the nearest road with unknown exits,
+    // passing only through roads.
+    const settle = (zone) => tracker.unknownExits(zone).forEach((exit) => tracker.markClosed(zone, exit.slot))
+    settle('TNL-109')
+    assert.deepStrictEqual(tracker.routeToUnexplored('TNL-109').map((hop) => hop.to), ['TNL-125'])
+    settle('TNL-125')
+    assert.deepStrictEqual(tracker.routeToUnexplored('TNL-109').map((hop) => hop.to), ['TNL-125', 'TNL-126'])
+    assert.strictEqual(tracker.routeToUnexplored('TNL-109')[1].exit.slot, 'instanceslot_10')
+    listener.emit('request', { parameters: { 253: 22, 1: [45, -270], 3: [45, -275] } })
+    listener.emit('response', { parameters: { 253: 2, 8: '4214', 66: 'TNL-126', 9: [0, 0] } })
+    settle('TNL-126')
+    assert.strictEqual(tracker.routeToUnexplored('TNL-109'), null, 'no road left with unknown exits')
 } finally {
     if (saved) fs.writeFileSync(linksPath, saved)
     else fs.rmSync(linksPath, { force: true })

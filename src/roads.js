@@ -121,6 +121,34 @@ class RoadTracker extends EventEmitter {
         addEntry(this.log, entry)
     }
 
+    // Portals of a road nobody has gone through yet and that aren't known to be closed.
+    unknownExits(zoneId, skipped = new Set()) {
+        return exitsOf(zoneId).filter((exit) => exit.kind === 'tunnelexit' && !skipped.has(`${zoneId}|${exit.slot}`)
+            && !this.linkOf(zoneId, exit.slot) && !this.closedAt(zoneId, exit.slot))
+    }
+
+    // Fewest portal hops over known links to another road with unknown exits, as
+    // [{ zone, exit, to }], or null. Only roads are passed through: other zones have no exit layout.
+    routeToUnexplored(from, skipped) {
+        const cameFrom = new Map([[from, null]])
+        const queue = [from]
+        while (queue.length) {
+            const zone = queue.shift()
+            if (zone !== from && this.unknownExits(zone, skipped).length) {
+                const hops = []
+                for (let at = zone; cameFrom.get(at); at = cameFrom.get(at).zone) hops.unshift(cameFrom.get(at))
+                return hops
+            }
+            for (const exit of exitsOf(zone)) {
+                const link = this.linkOf(zone, exit.slot)
+                if (!link || cameFrom.has(link.zone) || !exitsOf(link.zone).length) continue
+                cameFrom.set(link.zone, { zone, exit, to: link.zone })
+                queue.push(link.zone)
+            }
+        }
+        return null
+    }
+
     printZone() {
         const exits = exitsOf(this.zone)
         if (!exits.length) {

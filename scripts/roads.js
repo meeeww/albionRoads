@@ -137,9 +137,12 @@ const explore = async (tracker) => {
     const view = solveAffine(firstSamples)
 
     // `open`: the portal is known to be there (we just came through it), so never give up on it as closed.
+    let arrivedAt = Date.now()
     const usePortal = async (exit, open = false) => {
         try {
-            return await walkThrough(exit, open)
+            const result = await walkThrough(exit, open)
+            if (result === 'arrived') arrivedAt = Date.now()
+            return result
         } finally {
             release()
         }
@@ -163,6 +166,8 @@ const explore = async (tracker) => {
             const step = planStep(tracker.trails, tracker.zone, tracker.pos, target, view.toScreen, STEP_PX)
             if (!step) return 'unreachable'
             if (step.final) {
+                // A portal refuses the player for several seconds after coming through one.
+                await sleep(Math.max(0, arrivedAt + PORTAL_COOLDOWN_MS - Date.now()))
                 const zone = withTimeout(tracker, 'zone', 20000)
                 // A portal ignores clicks for several seconds after coming through it, so keep clicking.
                 for (let tries = 0; tries < 10; tries++) {
@@ -206,7 +211,10 @@ const explore = async (tracker) => {
                         const angle = i * Math.PI / 4
                         const spot = [spawn[0] + radius * Math.cos(angle), spawn[1] + radius * Math.sin(angle)]
                         click(view.toScreen([spot[0] - tracker.pos[0], spot[1] - tracker.pos[1]]))
-                        if (await Promise.race([zone, sleep(2500)])) return true
+                        if (await Promise.race([zone, sleep(2500)])) {
+                            arrivedAt = Date.now()
+                            return true
+                        }
                     }
                 }
             }
@@ -216,15 +224,26 @@ const explore = async (tracker) => {
         }
     }
 
-    const home = tracker.zone
     const skipped = new Set()
+    let home = tracker.zone
     for (;;) {
         if (tracker.zone !== home) throw new Error(`Ended up in ${nameOf(tracker.zone)} instead of ${nameOf(home)}.`)
-        const next = exitsOf(home)
-            .filter((exit) => exit.kind === 'tunnelexit' && !skipped.has(exit.slot)
-                && !tracker.linkOf(home, exit.slot) && !tracker.closedAt(home, exit.slot))
+        const next = tracker.unknownExits(home, skipped)
             .sort((a, b) => Math.hypot(a.x - tracker.pos[0], a.y - tracker.pos[1]) - Math.hypot(b.x - tracker.pos[0], b.y - tracker.pos[1]))[0]
-        if (!next) break
+        if (!next) {
+            console.log(`\nEvery open exit of ${nameOf(home)} is known:`)
+            tracker.printZone()
+            const hops = tracker.routeToUnexplored(home, skipped)
+            if (!hops) break
+            console.log(`\nHeading to ${nameOf(hops[hops.length - 1].to)}: ${hops.map((hop) => nameOf(hop.to)).join(' -> ')}`)
+            for (const hop of hops) {
+                if (await usePortal(hop.exit, true) !== 'arrived' || tracker.zone !== hop.to) {
+                    throw new Error(`Could not get from ${nameOf(hop.zone)} to ${nameOf(hop.to)}.`)
+                }
+            }
+            home = tracker.zone
+            continue
+        }
 
         const number = exitsOf(home).indexOf(next) + 1
         const away = Math.hypot(next.x - tracker.pos[0], next.y - tracker.pos[1])
@@ -244,12 +263,10 @@ const explore = async (tracker) => {
         }
         if (result !== 'arrived') {
             console.log('Could not find a way to that exit, skipping it this run.')
-            skipped.add(next.slot)
+            skipped.add(`${home}|${next.slot}`)
             continue
         }
 
-        // A portal refuses the player for several seconds after coming through it.
-        await sleep(PORTAL_COOLDOWN_MS)
         const back = exitsOf(tracker.zone).find((exit) => exit.slot === tracker.linkOf(home, next.slot)?.slot)
         console.log(`Going back to ${nameOf(home)}`)
         const wentBack = back ? await usePortal(back, true) === 'arrived' : await goBackBlind()
@@ -257,8 +274,7 @@ const explore = async (tracker) => {
         await sleep(3000)
     }
 
-    console.log(`\nDone. Every open exit of ${nameOf(home)}:`)
-    tracker.printZone()
+    console.log('\nDone: no known road has unknown exits left.')
 }
 
 if (require.main === module) {
