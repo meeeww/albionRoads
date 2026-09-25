@@ -6,6 +6,12 @@ const { RoadTracker, nearestExit } = require('../src/roads')
 const { Trails, planStep, markWallAhead, findPath } = require('../src/road-paths')
 const { solveAffine } = require('./roads')
 
+// Every road has exits, including roads that reuse another road's layout file.
+const zones = require('../data/zones.json')
+const roadsWithoutExits = Object.keys(zones).filter((id) => id.startsWith('TNL-') && !zones[id].exits?.length)
+assert.deepStrictEqual(roadsWithoutExits, [], 'roads without exits')
+assert.strictEqual(zones['TNL-341'].exits.length, 4)
+
 // Positions from a real hop: Sebos-Ugersum portal (-75, 565) to Coros-Alieam portal (245, 305).
 assert.strictEqual(nearestExit('TNL-109', [-70.2, 564.0]).slot, 'instanceslot_03')
 assert.strictEqual(nearestExit('TNL-125', [239.47, 305]).slot, 'instanceslot_02')

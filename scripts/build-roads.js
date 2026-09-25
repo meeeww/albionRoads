@@ -27,6 +27,13 @@ const main = async () => {
             .map(([, kind, slot]) => ({ kind, slot }))
         if (slots.length && zones[id] && id.startsWith('TNL-')) exitSlots[id] = slots
     }
+    // Many roads reuse another road's layout file (TNL-341 uses TNL-141's), and world.xml lists
+    // the exits only under the road that owns the file, so share them by file.
+    const slotsByFile = {}
+    for (const [id, slots] of Object.entries(exitSlots)) slotsByFile[zones[id].file] = slots
+    for (const [id, zone] of Object.entries(zones)) {
+        if (!exitSlots[id] && id.startsWith('TNL-') && slotsByFile[zone.file]) exitSlots[id] = slotsByFile[zone.file]
+    }
 
     const ids = Object.keys(exitSlots)
     console.log(`${Object.keys(zones).length} zones, ${ids.length} with road exits`)

@@ -12,9 +12,6 @@ const STEER_MS = 400
 // Within this many units of a portal spot the character counts as standing on it.
 const ARRIVED_UNITS = 8
 const CALIBRATION_PX = [[180, 0], [0, 180], [-180, -180], [-150, 120]]
-// Calibration keeps the first clicks plus this many recent walking clicks.
-const RECENT_SAMPLES = 20
-
 // Least-squares fit of d = A * s + b over (screen offset -> world offset) samples.
 const solveAffine = (samples) => {
     const det3 = (m) => m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
@@ -125,17 +122,9 @@ const explore = async (tracker) => {
         firstSamples.push({ s, d: [move.target[0] - move.pos[0], move.target[1] - move.pos[1]] })
         await sleep(1200)
     }
-    let recentSamples = []
-    let view = solveAffine(firstSamples)
-
-    const learn = (s, move) => {
-        const d = [move.target[0] - move.pos[0], move.target[1] - move.pos[1]]
-        const predicted = view.toWorld(s)
-        const off = Math.hypot(predicted[0] - d[0], predicted[1] - d[1])
-        if (off > Math.max(3, Math.hypot(...d) * 0.25)) console.log(`Click landed ${off.toFixed(1)} units off, recalibrating.`)
-        recentSamples = [...recentSamples, { s, d }].slice(-RECENT_SAMPLES)
-        view = solveAffine([...firstSamples, ...recentSamples])
-    }
+    // Only separate clicks calibrate: while the button is held, the game's move target is a point
+    // just ahead of the character, not the ground under the cursor.
+    const view = solveAffine(firstSamples)
 
     const usePortal = async (exit) => {
         try {
@@ -161,15 +150,14 @@ const explore = async (tracker) => {
                 const left = Math.hypot(target[0] - tracker.pos[0], target[1] - tracker.pos[1])
                 return left < ARRIVED_UNITS ? 'closed' : 'unreachable'
             }
-            const steeredAt = Date.now()
-            const answer = nextTarget(STEER_MS)
             hold(step.screen)
-            const move = await answer
-            if (move) learn(step.screen, move)
-            await sleep(Math.max(0, STEER_MS - (Date.now() - steeredAt)))
+            await sleep(STEER_MS)
             const pos = tracker.pos
             if (Math.hypot(pos[0] - last[0], pos[1] - last[1]) < 0.8) {
-                if (++stuck >= 2) {
+                stuck++
+                // A held button sometimes stops moving the character; a fresh click gets it going again.
+                if (stuck === 2) click(step.screen)
+                if (stuck >= 4) {
                     markWallAhead(tracker.trails, tracker.zone, pos, step.world)
                     stuck = 0
                 }
