@@ -26,7 +26,7 @@ const walk = (value, keyPath, message) => {
 // time in other units: time left or closing time, in seconds, ms, minutes or ticks.
 const [, hours = 0, minutes = 0] = /^(?:(\d+)h)?\s*(?:(\d+)m)?$/i.exec(process.argv[2] || '') || []
 const seenLeft = (hours * 60 + +minutes) * 60000
-const TOLERANCE = 30 * 60000
+const TOLERANCE = 3 * 60000
 const ENCODINGS = [
     ['seconds left', (v, t) => v * 1000],
     ['ms left', (v, t) => v],
@@ -41,7 +41,7 @@ const tryUnits = (value, keyPath, message) => {
     if (Array.isArray(value)) return value.forEach((item, i) => tryUnits(item, `${keyPath}[${i}]`, message))
     if (value && typeof value === 'object') return Object.entries(value).forEach(([k, v]) => tryUnits(v, `${keyPath}.${k}`, message))
     const number = Number(value)
-    if (!Number.isFinite(number) || number <= 0) return
+    if (!Number.isFinite(number) || number <= 0 || /\.(252|253|255)$/.test(keyPath)) return
     for (const [unit, leftOf] of ENCODINGS) {
         if (Math.abs(leftOf(number, message.t) - seenLeft) < TOLERANCE) matches.push({ message, keyPath, unit, value })
     }
@@ -59,7 +59,7 @@ for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
 console.log(`Unreadable messages: ${unread.undecoded} undecoded, ${unread.encrypted} encrypted packets.`)
 
 if (seenLeft) {
-    console.log(`Numbers that could mean ${hours}h ${minutes}m left (within 30 min):`)
+    console.log(`Numbers that could mean ${hours}h ${minutes}m left (within 3 min):`)
     for (const { message, keyPath, unit, value } of matches) {
         const code = message.kind === 'event' ? message.parameters[252] : message.parameters[253]
         console.log(`${new Date(message.t).toLocaleTimeString()}  ${message.kind} ${code}  ${keyPath} = ${value}  as ${unit}`)
