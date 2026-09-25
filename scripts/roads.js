@@ -1,10 +1,12 @@
 const { once } = require('events')
 const { RoadTracker, exitsOf, nameOf } = require('../src/roads')
+const { planStep, markWallAhead } = require('../src/road-paths')
 const { sleep } = require('../src/utils')
 
 const EXPLORE = process.argv.includes('--explore')
 // Clicks stay this many pixels from the character so they land on the ground, not the UI.
 const STEP_PX = 220
+const PORTAL_TIMEOUT_MS = 4 * 60 * 1000
 const CALIBRATION_PX = [[180, 0], [0, 180], [-180, -180]]
 
 // Solves d = A * s + b from three (screen offset -> world offset) samples.
@@ -73,40 +75,32 @@ const explore = async (tracker) => {
     const view = solveAffine(samples)
 
     const usePortal = async (exit) => {
-        let best = Infinity
-        let bestAt = Date.now()
-        let detour = 0
-        for (;;) {
-            const pos = tracker.pos
-            const delta = [exit.x - pos[0], exit.y - pos[1]]
-            const distance = Math.hypot(...delta)
-            if (distance < best - 1.5) {
-                best = distance
-                bestAt = Date.now()
-            }
-            if (Date.now() - bestAt > 45000) return false
-
-            let screen = view.toScreen(delta)
-            const length = Math.hypot(...screen)
-            if (length <= STEP_PX) {
+        const target = [exit.x, exit.y]
+        const started = Date.now()
+        let last = tracker.pos
+        let stuck = 0
+        while (Date.now() - started < PORTAL_TIMEOUT_MS) {
+            const step = planStep(tracker.trails, tracker.zone, tracker.pos, target, view.toScreen, STEP_PX)
+            if (!step) return 'unreachable'
+            if (step.final) {
                 const zone = withTimeout(tracker, 'zone', 20000)
-                click(screen)
-                if (await zone) return true
-                return false
+                click(step.screen)
+                return await zone ? 'arrived' : 'closed'
             }
-            screen = screen.map((v) => v * STEP_PX / length)
-            // ponytail: straight-line steering with a sideways nudge when stuck; no navmesh, so a
-            // wall between us and the portal can still trap it. Upgrade: waypoints per road layout.
-            if (Date.now() - bestAt > 4000) {
-                const angle = (detour++ % 2 ? -1 : 1) * Math.PI / 2.5
-                screen = [
-                    screen[0] * Math.cos(angle) - screen[1] * Math.sin(angle),
-                    screen[0] * Math.sin(angle) + screen[1] * Math.cos(angle),
-                ]
-            }
-            click(screen)
+            click(step.screen)
             await sleep(700)
+            const pos = tracker.pos
+            if (Math.hypot(pos[0] - last[0], pos[1] - last[1]) < 0.8) {
+                if (++stuck >= 2) {
+                    markWallAhead(tracker.trails, tracker.zone, pos, step.world)
+                    stuck = 0
+                }
+            } else {
+                stuck = 0
+            }
+            last = pos
         }
+        return 'unreachable'
     }
 
     const home = tracker.zone
@@ -119,8 +113,11 @@ const explore = async (tracker) => {
         if (!next) break
 
         console.log(`\nWalking to exit (${next.x}, ${next.y})`)
-        if (!await usePortal(next)) {
-            console.log('No zone change there, treating that exit as closed.')
+        const result = await usePortal(next)
+        if (result !== 'arrived') {
+            console.log(result === 'closed'
+                ? 'Clicked the portal but the zone did not change, treating that exit as closed.'
+                : 'Could not find a way to that exit, skipping it.')
             closed.add(next.slot)
             continue
         }
@@ -129,7 +126,7 @@ const explore = async (tracker) => {
         const back = exitsOf(tracker.zone).find((exit) => exit.slot === tracker.linkOf(home, next.slot)?.slot)
         if (!back) throw new Error(`Arrived in ${nameOf(tracker.zone)} but not next to a known exit, stopping.`)
         console.log(`Going back to ${nameOf(home)}`)
-        if (!await usePortal(back)) throw new Error('Could not go back through the portal.')
+        if (await usePortal(back) !== 'arrived') throw new Error('Could not go back through the portal.')
         await sleep(3000)
     }
 
@@ -145,6 +142,9 @@ if (require.main === module) {
             : 'Listening. Change zone once and the current road\'s exits will print here.',
     })
     const tracker = new RoadTracker(listener)
+    require('../src/road-map').startRoadMap(tracker)
+    process.on('exit', () => tracker.trails.save())
+    process.on('SIGINT', () => process.exit(0))
 
     if (EXPLORE) {
         once(tracker, 'zone').then(async () => {

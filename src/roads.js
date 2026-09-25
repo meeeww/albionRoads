@@ -2,6 +2,7 @@ const fs = require('fs')
 const path = require('path')
 const { EventEmitter } = require('events')
 const zones = require('../data/zones.json')
+const { Trails } = require('./road-paths')
 
 const LINKS_PATH = path.join(__dirname, '..', 'roads.jsonl')
 const JOIN = 2
@@ -50,17 +51,20 @@ const age = (t) => {
 }
 
 class RoadTracker extends EventEmitter {
-    constructor(listener) {
+    constructor(listener, trails = new Trails()) {
         super()
         this.zone = null
         this.pos = null
         this.links = readLinks()
+        this.trails = trails
+        setInterval(() => trails.save(), 15000).unref()
 
         listener.on('request', ({ parameters }) => {
             if (parameters?.[253] !== MOVE) return
             const pos = pair(parameters[1])
             if (!pos) return
             this.pos = pos
+            if (this.zone) trails.markWalked(this.zone, pos)
             this.emit('move', { pos, target: pair(parameters[3]) })
         })
 
@@ -71,6 +75,8 @@ class RoadTracker extends EventEmitter {
             const fromExit = nearestExit(from, this.pos)
             this.zone = to
             this.pos = pair(parameters[9])
+            if (this.pos) this.trails.markWalked(to, this.pos)
+            this.trails.save()
             const toExit = nearestExit(to, this.pos)
 
             if (from && from !== to) {
@@ -105,4 +111,4 @@ class RoadTracker extends EventEmitter {
     }
 }
 
-module.exports = { RoadTracker, nearestExit, exitsOf, nameOf }
+module.exports = { RoadTracker, nearestExit, exitsOf, nameOf, STALE_MS }
