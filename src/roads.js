@@ -2,7 +2,7 @@ const fs = require('fs')
 const path = require('path')
 const { EventEmitter } = require('events')
 const zones = require('../data/zones.json')
-const { Trails } = require('./road-paths')
+const { Trails, groundOf } = require('./road-paths')
 
 const LINKS_PATH = path.join(__dirname, '..', 'roads.jsonl')
 const JOIN = 2
@@ -103,6 +103,9 @@ class RoadTracker extends EventEmitter {
             const to = parameters[8]
             const fromExit = nearestExit(from, this.pos)
             this.zone = to
+            // ponytail: with a road's pieces and props known, a bump is almost always a mob or a player,
+            // so walls learned on a road only last the visit; a real unmapped wall is bumped once per visit.
+            if (groundOf(to)) this.trails.of(to).blocked.clear()
             this.pos = pair(parameters[9])
             if (this.pos) this.trails.markWalked(to, this.pos)
             this.trails.save()

@@ -24,8 +24,10 @@ const OFF_GROUND_FREE = 40
 // Portals stand about 40 units past the road's end with no road piece in between; this wide a
 // corridor from the road to each portal is walkable road.
 const APPROACH_HALF_WIDTH = 12
+const MAX_APPROACH = 80
 // A portal's collider stops the character like a wall; bumps this close to a portal learn nothing.
-const NO_WALLS_NEAR_EXIT = 40
+// Its frame pillars and fire bowls further out come from the layout props.
+const NO_WALLS_NEAR_EXIT = 12
 const nearExit = (zoneId, pos) => (zones[zoneId]?.exits || []).some((e) => Math.hypot(e.x - pos[0], e.y - pos[1]) < NO_WALLS_NEAR_EXIT)
 
 const NEIGHBORS = [[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]]
@@ -42,34 +44,51 @@ const groundOf = (zoneId) => {
         let out = null
         if (rects?.length) {
             const cost = new Map()
-            for (const [x, y, w, d, offroad] of rects) {
+            const cellsUnder = (x, y, w, d, visit) => {
                 for (let cx = Math.floor((x - w / 2) / CELL); cx < Math.ceil((x + w / 2) / CELL); cx++) {
-                    for (let cy = Math.floor((y - d / 2) / CELL); cy < Math.ceil((y + d / 2) / CELL); cy++) {
-                        const key = keyOf(cx, cy)
-                        if (!offroad || !cost.has(key)) cost.set(key, offroad ? OFFROAD_COST : ROAD_COST)
-                    }
+                    for (let cy = Math.floor((y - d / 2) / CELL); cy < Math.ceil((y + d / 2) / CELL); cy++) visit(keyOf(cx, cy))
                 }
             }
-            // ponytail: a straight corridor to the nearest road cell; a portal set at an angle to its road would need its piece's rotation.
+            // kind 0 main road, 1 side path, 2 a solid prop (portal frame, fire bowl, column).
+            for (const [x, y, w, d, kind] of rects) {
+                if (kind === 2) continue
+                cellsUnder(x, y, w, d, (key) => { if (!kind || !cost.has(key)) cost.set(key, kind ? OFFROAD_COST : ROAD_COST) })
+            }
+            // A portal is entered up its stairs (exit.facing); the corridor runs out that way until it meets the road.
+            // Without a facing (the mists city entrance) it heads for the nearest road cell.
             const roadCells = [...cost.keys()].map((key) => centerOf(...key.split(',').map(Number)))
             // Per exit slot, the unit direction from the portal out along its corridor.
             const approach = {}
+            const centerLine = new Set()
             for (const exit of zones[zoneId].exits || []) {
-                let near = null
-                for (const cell of roadCells) {
-                    if (!near || Math.hypot(cell[0] - exit.x, cell[1] - exit.y) < Math.hypot(near[0] - exit.x, near[1] - exit.y)) near = cell
+                let ux, uy, length
+                if (exit.facing) {
+                    ;[ux, uy] = exit.facing
+                    length = MAX_APPROACH
+                    for (let along = 0; along < MAX_APPROACH; along += CELL / 2) {
+                        if (cost.has(keyOf(...cellOf([exit.x + ux * along, exit.y + uy * along])))) { length = along; break }
+                    }
+                } else {
+                    let near = null
+                    for (const cell of roadCells) {
+                        if (!near || Math.hypot(cell[0] - exit.x, cell[1] - exit.y) < Math.hypot(near[0] - exit.x, near[1] - exit.y)) near = cell
+                    }
+                    length = Math.hypot(near[0] - exit.x, near[1] - exit.y) || 1
+                    ;[ux, uy] = [(near[0] - exit.x) / length, (near[1] - exit.y) / length]
                 }
-                const length = Math.hypot(near[0] - exit.x, near[1] - exit.y) || 1
-                const [ux, uy] = [(near[0] - exit.x) / length, (near[1] - exit.y) / length]
                 approach[exit.slot] = [ux, uy]
                 for (let along = -APPROACH_HALF_WIDTH; along <= length + CELL * EDGE_CELLS; along += CELL / 2) {
                     for (let across = -APPROACH_HALF_WIDTH; across <= APPROACH_HALF_WIDTH; across += CELL / 2) {
                         const key = keyOf(...cellOf([exit.x + ux * along - uy * across, exit.y + uy * along + ux * across]))
                         if (!cost.has(key)) cost.set(key, ROAD_COST)
+                        if (Math.abs(across) <= CELL) centerLine.add(key)
                     }
                 }
             }
-            const core = new Set()
+            for (const [x, y, w, d, kind] of rects) if (kind === 2) cellsUnder(x, y, w, d, (key) => cost.delete(key))
+            // The stairs between a portal's railings are too narrow to count as road away from the edges,
+            // but walking straight up their middle is how a portal is entered.
+            const core = new Set([...centerLine].filter((key) => cost.has(key)))
             for (const key of cost.keys()) {
                 const [cx, cy] = key.split(',').map(Number)
                 let inside = true
@@ -99,7 +118,16 @@ const groundOf = (zoneId) => {
                 }
             }
             for (const [key, d] of depth) cost.set(key, cost.get(key) + CENTER_COST / d)
-            out = { cost, core, main, depth, approach }
+            // Per exit slot, the first main-road spot on the corridor's center line, clear of the portal's frame.
+            const lineUp = {}
+            for (const exit of zones[zoneId].exits || []) {
+                const [ux, uy] = approach[exit.slot]
+                for (let along = 30; along <= 80 && !lineUp[exit.slot]; along += CELL / 2) {
+                    const spot = [exit.x + ux * along, exit.y + uy * along]
+                    if (main.has(keyOf(...cellOf(spot)))) lineUp[exit.slot] = spot
+                }
+            }
+            out = { cost, core, main, depth, lineUp }
         }
         groundCache.set(zoneId, out)
     }

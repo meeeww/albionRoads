@@ -57,6 +57,11 @@ try {
         listener.emit('request', { parameters: { 253: 22, 1: [-70.2, 564.0], 3: [-75, 565] } })
         listener.emit('response', { parameters: { 253: 2, 8: 'TNL-125', 66: 'TNL-109', 9: [239.47, 305] } })
     }
+    // Walls learned on a road last one visit: entering it again starts clean.
+    tracker.trails.of('TNL-125').blocked.add('1,1')
+    hopAgain()
+    assert.ok(!tracker.trails.of('TNL-125').blocked.has('1,1'), 'walls cleared on entering a road')
+
     const closes = Date.now() + 10 * 3600 * 1000
     tracker.setTimer('TNL-109', 'instanceslot_03', closes)
     assert.strictEqual(tracker.linkOf('TNL-125', 'instanceslot_02').expires, closes)
@@ -228,9 +233,8 @@ for (const zoneId of ['TNL-109', 'TNL-220']) {
         }
         // Stepping back along the corridor lands on the road, clear of the frame pillars.
         for (const e of zones[zoneId].exits) {
-            const [ux, uy] = groundOf(zoneId).approach[e.slot]
-            const lineUp = [e.x + ux * 35, e.y + uy * 35].map((v) => Math.floor(v / CELL)).join()
-            assert.ok(core.has(lineUp), `${zoneId} exit (${e.x}, ${e.y}): the line-up spot is off the road`)
+            const spot = groundOf(zoneId).lineUp[e.slot]
+            assert.ok(spot && clearLine(trails, zoneId, spot, [e.x, e.y]), `${zoneId} exit (${e.x}, ${e.y}): no clear line-up spot`)
         }
         const exit = zones[zoneId].exits[0]
         trails.markBlocked(zoneId, [exit.x + 10, exit.y])

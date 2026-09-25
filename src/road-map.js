@@ -397,8 +397,9 @@ function drawZone() {
     zctx.fillStyle = PIECE[p.kind] || '#262b20'
     zctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size)
   }
-  for (const [x, y, w, d, offroad] of z.ground) {
-    zctx.fillStyle = offroad ? '#343a2a' : '#5a5440'
+  // Main road, side paths, then solid props (portal frames, fire bowls, columns) on top.
+  for (const [x, y, w, d, kind] of [...z.ground].sort((a, b) => a[4] - b[4])) {
+    zctx.fillStyle = ['#5a5440', '#343a2a', '#9a5a44'][kind]
     zctx.fillRect(x - w / 2, y - d / 2, w, d)
   }
   const ICON_PX = 34

@@ -15,17 +15,44 @@ const get = async (file, base = BASE) => {
     return res.text()
 }
 
-// Road pieces of one template as [layerId | null, x, z, width, depth, offroad], rotated into the template's frame.
-// ROAD and TRANS pieces are the main road, OFFROAD the side paths; BACKDROP pieces (trees, rock walls) are not walkable.
+// Solid props that stand on the road (portal frames, fire bowls, columns), as [name pattern, width, depth]
+// before the tile's own scale. Names ending in _NOCOL have no collider.
+// ponytail: footprints are eyeballed per prop type; the real colliders live in the game's prefabs, not in these dumps.
+const PROPS = [
+    [/^INVISIBLE_COLLISON_.*?(\d+)x(\d+)/, null, null],
+    [/PORTAL_PILLAR/, 4, 4],
+    [/FIREBOWL/, 3, 3],
+    [/COLUMN/, 3, 3],
+    [/STATUE/, 4, 4],
+    [/RAILING/, 4, 1],
+]
+// Props lower than this sit below the road (backdrop cliffs), not on it.
+const PROP_MIN_HEIGHT = -3
+
+// Road pieces of one template as [layerId | null, x, z, width, depth, kind], rotated into the template's frame.
+// kind 0 is main road (ROAD and TRANS pieces), 1 a side path (OFFROAD), 2 a solid prop on the road.
+// BACKDROP pieces (trees, rock walls) are not walkable.
 // ponytail: an S-curve or corner counts as its whole bounding box; walls learned while walking cover the rest.
 const parseGround = (text) => {
     const tiles = []
     let layer = null
-    const pattern = /<layer id="([^"]+)"|<\/layer>|<compoundtile name="_ROADS_[A-Z]+_(ROAD|TRANS|OFFROAD)_[^"]*?(\d+)x(\d+)[^"]*" pos="(-?[\d.]+) -?[\d.]+ (-?[\d.]+)"([^>]*)>/g
-    for (const [token, layerId, kind, w, h, x, z, rest] of text.matchAll(pattern)) {
+    const pattern = /<layer id="([^"]+)"|<\/layer>|<compoundtile name="_ROADS_[A-Z]+_(ROAD|TRANS|OFFROAD)_[^"]*?(\d+)x(\d+)[^"]*" pos="(-?[\d.]+) -?[\d.]+ (-?[\d.]+)"([^>]*)>|<tile name="([^"]+)" pos="(-?[\d.]+) (-?[\d.]+) (-?[\d.]+)"([^>]*)>/g
+    for (const [token, layerId, kind, w, h, x, z, rest, prop, px, py, pz, propRest] of text.matchAll(pattern)) {
         if (layerId) layer = layerId
         else if (token === '</layer>') layer = null
-        else {
+        else if (prop) {
+            // PLATFORM railings trim a platform's edge under the walking surface.
+            if (/NOCOL|GROUND|PLATFORM/.test(prop) || Number(py) < PROP_MIN_HEIGHT) continue
+            const match = PROPS.map(([re, pw, pd]) => [prop.match(re), pw, pd]).find(([m]) => m)
+            if (!match) continue
+            const [m, pw, pd] = match
+            const scale = propRest.match(/scale="([^"]+)"/)?.[1].split(' ').map(Number) || [1, 1, 1]
+            const rot = Number(propRest.match(/roty="([^"]+)"/)?.[1] ?? propRest.match(/rot="[^ ]+ ([^ ]+)/)?.[1] ?? 0)
+            const turned = Math.round(rot / 90) % 2 !== 0
+            const width = (pw ?? Number(m[1])) * scale[0]
+            const depth = (pd ?? Number(m[2])) * scale[2]
+            tiles.push([layer, Number(px), Number(pz), turned ? depth : width, turned ? width : depth, 2])
+        } else {
             const rot = Number(rest.match(/roty="([^"]+)"/)?.[1] ?? 0)
             const turned = Math.round(rot / 90) % 2 !== 0
             tiles.push([layer, Number(x), Number(z), Number(turned ? h : w), Number(turned ? w : h), kind === 'OFFROAD' ? 1 : 0])
@@ -103,9 +130,15 @@ const main = async () => {
             const layout = await get(zones[id].file)
             layouts[zones[id].file] = layout
             const positions = {}
+            const facings = {}
             const pieces = []
-            for (const [, slot, ref, x, y] of layout.matchAll(/<templateinstance id="([^"]+)" ref="([^"]+)"[^>]*? pos="(-?[\d.]+) -?[\d.]+ (-?[\d.]+)"/g)) {
+            for (const [, slot, ref, x, y, rest] of layout.matchAll(/<templateinstance id="([^"]+)" ref="([^"]+)"[^>]*? pos="(-?[\d.]+) -?[\d.]+ (-?[\d.]+)"([^>]*)/g)) {
                 positions[slot] = [Number(x), Number(y)]
+                // Portal pieces are entered up stairs on their local +x side, turned with the piece.
+                if (/_Portal_(?!Mistcity)/.test(ref)) {
+                    const angle = ROT_SIGN * Number(rest.match(/rot="([^"]+)"/)?.[1] || 0) * Math.PI / 180
+                    facings[slot] = [Math.round(Math.cos(angle)), -Math.round(Math.sin(angle))]
+                }
                 // S_ and M_ pieces are 80 and 280 units square; the ROAD_ base spans the whole zone.
                 const size = { S: 80, M: 280 }[ref[0]]
                 const kind = ref.match(/_(Portal|RES|PVE|DNG|Sleeve|EMPTY)/)?.[1]
@@ -115,7 +148,7 @@ const main = async () => {
             zones[id].pieces = pieces
             zones[id].exits = exitSlots[id]
                 .filter(({ slot }) => positions[slot])
-                .map(({ kind, slot }) => ({ slot, kind, x: positions[slot][0], y: positions[slot][1] }))
+                .map(({ kind, slot }) => ({ slot, kind, x: positions[slot][0], y: positions[slot][1], facing: facings[slot] }))
         }))
     }
 
@@ -143,4 +176,4 @@ if (require.main === module) {
     })
 }
 
-module.exports = { main, groundOf }
+module.exports = { main, groundOf, parseGround }
